@@ -1,0 +1,38 @@
+[plugin]
+name = "QQ集成"
+description = "通过 OneBot v11（正向/反向 WebSocket，兼容 NapCat / LLOneBot / go-cqhttp / Lagrange 等任意 OneBot 后端）或 QQ 官方开放平台接入 QQ。支持多群注意力竞争、疲劳系统、动态回复缓冲、文件内容读取（文本/VLM 图片描述）、多模态输出、提示词编辑、戳一戳、表情包等功能。还会定时去 B 站刷视频（抓标题、弹幕、字幕）形成自己的见闻，聊天和主动搭话时自然地提起来；别人发来 B 站链接时也能打开看内容（含弹幕与字幕原文）再回话。断线重连后会自动和 QQ 服务端历史对账，把断网、机器休眠、协议端掉线期间漏掉的消息补回正常处理流程（另有定期对账兜底），不会再出现“断网就丢消息”。\n\n新增：本地图库（收到的图/表情包连描述一起入库、按内容去重、可按关键词检索），QQ 表情索引（商城表情走零成本 mface 指针、收藏表情按图片 md5 认一次永久复用，省钱不重复花识别费），识图服务（套用本体主模型，双键缓存跨重启复用），以及一键换 QQ 头像（居中裁方、缩到 640、换完自动反查确认落地，失败自动重试）。"
+short_description = "完整 QQ 机器人集成：OneBot v11 泛用连接 / 开放平台双通道、注意力管理、主动搭话、B 站见闻、文件内容读取、多模态交互、图库与表情包、识图、换头像"
+keywords = ["qq", "onebot", "onebot-v11", "napcat", "llonebot", "go-cqhttp", "lagrange", "qq-open-platform", "auto-reply", "chat", "attention", "fatigue", "sticker", "poke", "voice", "buffer", "file", "vlm", "forward-websocket", "reverse-websocket", "bilibili", "proactive", "gallery", "image", "avatar", "emoji", "face-index"]
+passive = true
+version = "0.8.3"
+id = "qq_auto_reply"
+type = "plugin"
+entry = "plugin.plugins.qq_auto_reply:QQAutoReplyPlugin"
+
+[plugin.author]
+name = "manbo"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.store]
+enabled = false
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "Hello QQ"
+entry = "static/index.html"
+context = "qq_auto_reply"
+permissions = ["state:read", "action:call"]
+
+[plugin_runtime]
+enabled = true
+auto_start = false
