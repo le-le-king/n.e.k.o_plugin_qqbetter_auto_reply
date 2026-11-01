@@ -1172,7 +1172,7 @@ class QQBilibiliBrowseService:
                 },
                 "required": [],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     def recall_recent(self, query: str = "", limit: int = 3) -> str:

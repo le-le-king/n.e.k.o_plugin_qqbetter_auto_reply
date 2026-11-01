@@ -201,7 +201,7 @@ class QQMemoryToolService:
                 # 时 execute_recall 早退回"没有找到相关记忆"。
                 "required": [],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     def no_result_text(self) -> str:

@@ -731,7 +731,7 @@ class QQSettingsService:
     #: ``(source, account_id)``, so this string must never change casually —
     #: changing it re-imports every account additively.
     LEGACY_TRUST_SOURCE = (
-        "qq_auto_reply.business_config.speaker_trust_profiles.v1"
+        "qqbetter_auto_reply.business_config.speaker_trust_profiles.v1"
     )
 
     async def push_legacy_speaker_trust_forever(self) -> None:

@@ -1,4 +1,4 @@
-# QQ集成（qq_auto_reply）
+# QQ集成（qqbetter_auto_reply）
 
 让 N.E.K.O. 接入 QQ，成为一个有自己"见闻"和"记忆"的 AI 伙伴。通过 OneBot v11（正向 / 反向 WebSocket，兼容 NapCat / LLOneBot / go-cqhttp / Lagrange 等任意 OneBot 后端）或 QQ 官方开放平台接入，支持多群注意力竞争、疲劳系统、动态回复缓冲、主动搭话、B 站见闻、文件内容读取、多模态输出、图库与表情包、识图、换头像等能力。
 
@@ -33,13 +33,13 @@
 插件源码及其 Git 仓库直接位于：
 
 ```text
-src/qq_auto_reply/
+src/qqbetter_auto_reply/
 ```
 
 发布到插件市场时，请使用以下 GitHub 仓库名：
 
 ```text
-n.e.k.o_plugin_qq_auto_reply
+n.e.k.o_plugin_qqbetter_auto_reply
 ```
 
 Python 运行时依赖声明在 `pyproject.toml` 中，并在打包时同步到 `vendor/`。
@@ -50,14 +50,14 @@ Python 运行时依赖声明在 `pyproject.toml` 中，并在打包时同步到 
 发布 `plugin.toml` 中声明的版本。默认会推送 Git tag、等待标准 GitHub Release，然后通知插件市场。
 
 ```bash
-uv run neko-plugin publish qq_auto_reply
+uv run neko-plugin publish qqbetter_auto_reply
 ```
 
 如需仅执行一部分：
 
 ```bash
-uv run neko-plugin publish github qq_auto_reply
-uv run neko-plugin publish market https://github.com/<owner>/n.e.k.o_plugin_qq_auto_reply/releases/tag/v0.8.3
+uv run neko-plugin publish github qqbetter_auto_reply
+uv run neko-plugin publish market https://github.com/<owner>/n.e.k.o_plugin_qqbetter_auto_reply/releases/tag/v0.8.3
 ```
 
 生成的 `.github/workflows/release.yml` 会构建并上传插件包；Market 会独立验证该 Release 后再发布。
@@ -65,5 +65,5 @@ uv run neko-plugin publish market https://github.com/<owner>/n.e.k.o_plugin_qq_a
 ## Entry
 
 ```toml
-entry = "plugin.plugins.qq_auto_reply:QQAutoReplyPlugin"
+entry = "plugin.plugins.qqbetter_auto_reply:QQAutoReplyPlugin"
 ```

@@ -6,5 +6,5 @@ def test_plugin_manifest_exists() -> None:
     manifest = root / "plugin.toml"
     assert manifest.is_file()
     text = manifest.read_text(encoding="utf-8")
-    assert 'id = "qq_auto_reply"' in text
-    assert 'entry = "plugin.plugins.qq_auto_reply:QQAutoReplyPlugin"' in text
+    assert 'id = "qqbetter_auto_reply"' in text
+    assert 'entry = "plugin.plugins.qqbetter_auto_reply:QQAutoReplyPlugin"' in text

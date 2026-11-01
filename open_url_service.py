@@ -354,7 +354,7 @@ class QQOpenUrlToolService:
                 },
                 "required": ["url"],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     # ── 执行 ────────────────────────────────────────────────

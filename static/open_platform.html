@@ -238,7 +238,7 @@ function escapeHtml(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'
 // 从此点不动。以前进这里的只有 ID（纯 openid/群号，不含换行），现在待认领
 // 清单会把**昵称**传进来，而昵称是别人随手打的。
 function escapeOnclick(s){return escapeHtml(String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r/g,'\\r').replace(/\n/g,'\\n'))}
-const P='qq_auto_reply',RUNS='/runs',MODE='open_platform';
+const P='qqbetter_auto_reply',RUNS='/runs',MODE='open_platform';
 let state={mode:MODE,running:!1,onebotOk:!1,selfId:'',nickname:'',settings:{},users:[],groups:[],backlogLabels:[],backlogItems:[],identityScope:{},claims:[],identityCandidates:[]};
 function t(key,fallback){return window.I18n&&typeof window.I18n.t==='function'?window.I18n.t(key,fallback):(fallback||key)}
 function tf(key,fallback,vals){return t(key,fallback).replace(/\{([a-zA-Z0-9_]+)\}/g,(m,n)=>vals.hasOwnProperty(n)?String(vals[n]):m)}

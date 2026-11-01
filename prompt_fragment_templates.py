@@ -74,7 +74,7 @@ TIME_PROMPT_SECTION = """\
 CHAT_ENV_PROMPT_SECTION = """\
 ## 当前聊天会话信息（Chat Environment）
 - 当前平台：QQ
-- 当前平台适配器名称：qq_auto_reply
+- 当前平台适配器名称：qqbetter_auto_reply
 - 当前聊天类型：{chat_type}
 - 你的账号 ID：{self_id}
 - 当前会话标题（即群名称或用户名或自定义备注名）：{session_title}

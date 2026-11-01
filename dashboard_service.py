@@ -578,7 +578,7 @@ class QQDashboardService:
             result = await bridge.bind_speaker_account(
                 account_id=source_account,
                 entity_id=entity_id,
-                bound_by="qq_auto_reply.dashboard",
+                bound_by="qqbetter_auto_reply.dashboard",
                 # 真正的把关：上面那次预检会被并发绕过（两个页签同时绑同一
                 # 个源，两次预检都答「没绑」，第二次就走进 merge 分支融合
                 # 两个候选）。只有临界区里的这一次判断不会失效。

@@ -1,7 +1,7 @@
 const I18n = {
   _bundle: {},
   _lang: 'zh-CN',
-  _pluginId: 'qq_auto_reply',
+  _pluginId: 'qqbetter_auto_reply',
   _ready: false,
 
   lang() {
@@ -64,7 +64,7 @@ const I18n = {
     // 从插件保存的设置中读取 locale（优先级高于宿主语言）
     let pluginLocale = '';
     try {
-      const pluginStorageKey = 'qq_auto_reply_locale';
+      const pluginStorageKey = 'qqbetter_auto_reply_locale';
       pluginLocale = String(localStorage.getItem(pluginStorageKey) || '').trim();
     } catch (e) {}
     let resolved = queryLocale || pluginLocale || storageLocale || '';
@@ -135,7 +135,7 @@ window.I18n = I18n;
 
 (function bootstrapI18n() {
   const match = location.pathname.match(/\/plugin\/([^/]+)\/ui\//);
-  const pluginId = match ? match[1] : 'qq_auto_reply';
+  const pluginId = match ? match[1] : 'qqbetter_auto_reply';
   I18n.init(pluginId).then(() => {
     I18n.scanDOM();
     window.dispatchEvent(new CustomEvent('i18n-ready', { detail: { locale: I18n.lang() } }));

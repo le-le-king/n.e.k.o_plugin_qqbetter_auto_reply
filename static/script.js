@@ -1,4 +1,4 @@
-const pluginId = 'qq_auto_reply';
+const pluginId = 'qqbetter_auto_reply';
         const RUNS_URL = '/runs';
 
         async function callPlugin(entry, args = {}) {
@@ -1170,13 +1170,13 @@ const pluginId = 'qq_auto_reply';
             }
         });
         window.addEventListener('qq-auto-reply-i18n-refreshed', (event) => {
-            console.log('[qq_auto_reply i18n debug] qq-auto-reply-i18n-refreshed', event.detail);
+            console.log('[qqbetter_auto_reply i18n debug] qq-auto-reply-i18n-refreshed', event.detail);
             if (state.dashboard) {
                 applyDashboardState(state.dashboard);
             }
         });
         window.addEventListener('localechange', (event) => {
-            console.log('[qq_auto_reply i18n debug] localechange received', event.detail, {
+            console.log('[qqbetter_auto_reply i18n debug] localechange received', event.detail, {
                 documentLang: document.documentElement.lang,
                 search: location.search,
                 localStorageLocale: (() => { try { return localStorage.getItem('locale'); } catch { return null; } })(),

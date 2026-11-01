@@ -730,7 +730,7 @@ class QQGalleryService:
                 },
                 "required": [],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     def build_avatar_definition(self):
@@ -756,5 +756,5 @@ class QQGalleryService:
                 },
                 "required": ["id"],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )

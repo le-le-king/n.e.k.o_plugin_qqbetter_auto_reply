@@ -19,7 +19,7 @@
   function ensureEs() {
     if (es) return es;
     var m = location.pathname.match(/\/plugin\/([^/]+)\/ui\//);
-    var pluginId = m ? m[1] : 'qq_auto_reply';
+    var pluginId = m ? m[1] : 'qqbetter_auto_reply';
     try {
       es = new EventSource('/plugin/' + encodeURIComponent(pluginId) + '/ui-api/events');
     } catch (e) {

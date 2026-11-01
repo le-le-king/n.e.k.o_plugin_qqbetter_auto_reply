@@ -430,7 +430,7 @@ class QQStickerService:
                 },
                 "required": [],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     def build_send_definition(self):
@@ -453,7 +453,7 @@ class QQStickerService:
                 },
                 "required": ["query"],
             },
-            metadata={"source": "qq_auto_reply"},
+            metadata={"source": "qqbetter_auto_reply"},
         )
 
     async def execute_save(

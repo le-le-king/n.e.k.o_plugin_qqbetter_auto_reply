@@ -882,7 +882,7 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
     async def _build_dashboard_state(self) -> dict[str, Any]:
         return await self.dashboard_service.build_dashboard_state()
 
-    @ui.context(id="qq_auto_reply")
+    @ui.context(id="qqbetter_auto_reply")
     async def get_dashboard_context(self):
         return await self.dashboard_service.build_dashboard_context()
 

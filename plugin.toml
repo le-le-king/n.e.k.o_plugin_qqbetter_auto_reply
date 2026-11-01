@@ -5,9 +5,9 @@ short_description = "完整 QQ 机器人集成：OneBot v11 泛用连接 / 开�
 keywords = ["qq", "onebot", "onebot-v11", "napcat", "llonebot", "go-cqhttp", "lagrange", "qq-open-platform", "auto-reply", "chat", "attention", "fatigue", "sticker", "poke", "voice", "buffer", "file", "vlm", "forward-websocket", "reverse-websocket", "bilibili", "proactive", "gallery", "image", "avatar", "emoji", "face-index"]
 passive = true
 version = "0.8.3"
-id = "qq_auto_reply"
+id = "qqbetter_auto_reply"
 type = "plugin"
-entry = "plugin.plugins.qq_auto_reply:QQAutoReplyPlugin"
+entry = "plugin.plugins.qqbetter_auto_reply:QQAutoReplyPlugin"
 
 [plugin.author]
 name = "manbo"
@@ -30,7 +30,7 @@ enabled = true
 id = "main"
 title = "Hello QQ"
 entry = "static/index.html"
-context = "qq_auto_reply"
+context = "qqbetter_auto_reply"
 permissions = ["state:read", "action:call"]
 
 [plugin_runtime]

@@ -553,7 +553,7 @@ class QQSessionInstructionService:
         account_lines = [
             f"- 你的角色名：{her_name}",
             "- 当前平台：QQ",
-            "- 当前平台适配器名称：qq_auto_reply",
+            "- 当前平台适配器名称：qqbetter_auto_reply",
             f"- 当前 QQ 账号状态：{status}",
             f"- 当前 QQ 账号 ID：{login_self_id or '未知'}",
             f"- 当前 QQ 账号昵称：{login_nickname or '未知'}",
