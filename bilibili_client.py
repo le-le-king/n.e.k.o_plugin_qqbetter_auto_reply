@@ -170,7 +170,6 @@ class BilibiliClient:
             import ssl
 
             import aiohttp
-
             import certifi
 
             ctx = ssl.create_default_context(cafile=certifi.where())
@@ -540,10 +539,9 @@ class BilibiliClient:
             url = "https://" + url[len("http://"):]
 
         async def _fetch():
-            import aiohttp
-
             import ssl
 
+            import aiohttp
             import certifi
 
             ctx = ssl.create_default_context(cafile=certifi.where())

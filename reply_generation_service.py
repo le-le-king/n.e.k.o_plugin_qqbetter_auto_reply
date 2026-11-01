@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
@@ -9,23 +8,22 @@ from main_logic.tool_calling import ToolResult
 from utils.llm_client import AIMessage, SystemMessage, create_chat_llm_async
 from utils.token_tracker import set_call_type
 
-from .memory_tool_service import RECALL_TOOL_HTTP_TIMEOUT_SECONDS
 from .bilibili_browse_service import BILIBILI_TOOL_NAME
 from .bilibili_video import BILIBILI_WATCH_TOOL_NAME, WATCH_TIMEOUT_SECONDS
-from .open_url_service import OPEN_TOOL_HTTP_TIMEOUT_SECONDS, OPEN_TOOL_NAME
-from .sticker_service import SAVE_TOOL_NAME, SEND_TOOL_NAME
 from .gallery_service import AVATAR_TOOL_NAME, BROWSE_TOOL_NAME
-from .search_tool_service import (
-    SEARCH_TOOL_HTTP_TIMEOUT_SECONDS,
-    SEARCH_TOOL_NAME,
-)
+from .memory_tool_service import RECALL_TOOL_HTTP_TIMEOUT_SECONDS
+from .open_url_service import OPEN_TOOL_HTTP_TIMEOUT_SECONDS, OPEN_TOOL_NAME
 from .pipeline_models import (
-    QQInstructionBundle,
     QQModelResult,
     QQPipelineStageTrace,
     QQReplyContext,
     is_synthetic_source,
 )
+from .search_tool_service import (
+    SEARCH_TOOL_HTTP_TIMEOUT_SECONDS,
+    SEARCH_TOOL_NAME,
+)
+from .sticker_service import SAVE_TOOL_NAME, SEND_TOOL_NAME
 
 
 class QQReplyGenerationService:

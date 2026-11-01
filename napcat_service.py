@@ -5,7 +5,6 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 
 class QQNapcatService:

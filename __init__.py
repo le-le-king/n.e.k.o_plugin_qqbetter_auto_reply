@@ -1,33 +1,14 @@
 
 from __future__ import annotations
 
-# 加载本地依赖
-import sys as _sys, pathlib as _pathlib
-
-from plugin.plugins.qq_auto_reply.backlog_store import QQBacklogStore
-_lib_dir = _pathlib.Path(__file__).parent / "lib"
-if _lib_dir.exists() and str(_lib_dir) not in _sys.path:
-    _sys.path.insert(0, str(_lib_dir))
-del _sys, _pathlib, _lib_dir
-
 import asyncio
-import base64
-import copy
-import inspect
-import io
 import json
-import random
 import time
-import wave
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config.prompts.prompts_sys import _loc
-from config.prompts.prompts_voice import VOICE_PREVIEW_TEXTS
-from plugin.sdk.plugin import NekoPluginBase, lifecycle, neko_plugin, plugin_entry, Ok, Err, SdkError, tr, ui
+from plugin.sdk.plugin import Err, NekoPluginBase, Ok, SdkError, lifecycle, neko_plugin, plugin_entry, tr, ui
 
-from utils.api_config_loader import get_free_voices
-from utils.config_manager import get_reserved
 try:
     from utils.tts.native_voice_registry import get_active_realtime_native_provider_for_ui
 except (ImportError, ModuleNotFoundError):
@@ -37,52 +18,57 @@ try:
 except (ImportError, ModuleNotFoundError):
     normalize_gemini_tts_voice = None
 try:
-    from utils.voice_clone import MimoVoiceCloneClient, MimoVoiceCloneError, MinimaxVoiceCloneClient, MinimaxVoiceCloneError
+    from utils.voice_clone import (
+        MimoVoiceCloneClient,
+        MimoVoiceCloneError,
+        MinimaxVoiceCloneClient,
+        MinimaxVoiceCloneError,
+    )
 except (ImportError, ModuleNotFoundError):
     MimoVoiceCloneClient = MimoVoiceCloneError = MinimaxVoiceCloneClient = MinimaxVoiceCloneError = None
 try:
     from utils.voice_config import read_legacy_voice_id
 except (ImportError, ModuleNotFoundError):
     read_legacy_voice_id = None
-from .dashboard_service import QQDashboardService
-from .feedback_classifier import QQFeedbackClassifier
-from .backlog_models import QQBacklogMessage
-from .backlog_service import QQBacklogService
+
+from .attention_gate_service import QQAttentionGateService
 from .attention_service import QQAttentionService
+from .backlog_service import QQBacklogService
+from .backlog_store import QQBacklogStore
 from .bilibili_browse_service import QQBilibiliBrowseService
 from .bilibili_login_service import QQBilibiliLoginService
 from .bilibili_video import QQBilibiliVideoService
 from .catchup_service import QQMessageCatchupService
-from .face_index import QQFaceIndex
-from .gallery_service import QQGalleryService
-from .sticker_service import QQStickerService
-from .vision_service import QQVisionService
 from .config_store import QQAutoReplyConfigStore
+from .dashboard_service import QQDashboardService
+from .display_name_service import QQDisplayNameService
+from .face_index import QQFaceIndex
 from .fatigue_service import QQFatigueService
+from .gallery_service import QQGalleryService
 from .group_permission import GroupPermissionManager
 from .handler_runtime_service import QQHandlerRuntimeService
-from .message_dispatcher import QQMessageDispatcher
 from .memory_bridge import QQMemoryBridge
-from .display_name_service import QQDisplayNameService
 from .memory_tool_service import QQMemoryToolService
+from .message_dispatcher import QQMessageDispatcher
 from .napcat_service import QQNapcatService
+from .open_url_service import QQOpenUrlToolService
 from .permission import PermissionManager
+from .proactive_private_service import QQProactivePrivateService
 from .prompt_builder import QQPromptBuilder
 from .prompting import QQAutoReplyPromptingMixin
+from .qq_client import QQClient
 from .relay_service import QQRelayService
 from .reply_buffer_service import QQReplyBufferService
 from .reply_context_node import QQReplyContextNode
 from .reply_decision_node import QQReplyDecisionNode
+from .reply_delivery_node import QQReplyDeliveryNode
 from .reply_generation_service import QQReplyGenerationService
 from .reply_model_node import QQReplyModelNode
 from .reply_pipeline import QQReplyPipelineRunner
 from .reply_postprocess_node import QQReplyPostprocessNode
-from .reply_delivery_node import QQReplyDeliveryNode
 from .reply_relay_node import QQReplyRelayNode
 from .runtime_ops_service import QQProactiveMessageService, QQRuntimeOpsService
 from .runtime_service import QQRuntimeService
-from .open_url_service import QQOpenUrlToolService
-from .proactive_private_service import QQProactivePrivateService
 from .search_tool_service import QQSearchToolService
 from .session import QQAutoReplySessionMixin
 from .session_bootstrap_service import QQSessionBootstrapService
@@ -93,9 +79,10 @@ from .session_instruction_service import (
 from .session_memory_service import QQSessionMemoryService
 from .session_runtime_service import QQSessionRuntimeService
 from .settings_service import QQSettingsService
-from .targets import QQAutoReplyTargetsMixin, QQAutoReplyValidationError
+from .sticker_service import QQStickerService
+from .targets import QQAutoReplyTargetsMixin
+from .vision_service import QQVisionService
 from .voice_reply_service import QQVoiceReplyService
-from .attention_gate_service import QQAttentionGateService
 
 
 def build_open_ui_payload(*, plugin_id: str, available: bool, i18n=None) -> dict[str, Any]:
@@ -121,7 +108,8 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         self.file_logger = self.enable_file_logging(log_level="INFO")
         self.logger = self.file_logger
         # 内存日志缓冲区（供前端运行日志页读取）
-        import collections, time as _time
+        import collections
+        import time as _time
         self._log_buffer: collections.deque = collections.deque(maxlen=self.LOG_BUFFER_SIZE)
         self._last_log_push_at = 0.0
         self._log_push_throttle_seconds = 1.5
@@ -258,7 +246,6 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
                 # 取证行要同时进 UI 的「运行日志」页，不能只落文件。
                 emit_log=self._emit_log,
             )
-        from .qq_client import QQClient
         return QQClient(
             onebot_url=str((self._qq_settings or {}).get("onebot_url") or "ws://0.0.0.0:6199"),
             token=str((self._qq_settings or {}).get("token") or ""),
@@ -291,8 +278,8 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         用进程级回环 HTTP 单例 + 固定插件服务基址；只发本插件的 channel。
         """
         try:
-            from utils.internal_http_client import get_internal_http_client
             from config import USER_PLUGIN_BASE
+            from utils.internal_http_client import get_internal_http_client
 
             client = get_internal_http_client()
             await client.post(
@@ -333,8 +320,10 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
     async def _transcribe_voice(self, audio_base64: str = "", *, audio_url: str = "") -> str:
         """语音转文字：优先本地 STT，其次云端 OpenAI/Qwen。audio_url 用于 Qwen。"""
         try:
+            import base64 as b64
+
+            import httpx
             from utils.config_manager import get_config_manager
-            import httpx, base64 as b64
 
             core_config = get_config_manager().get_core_config() or {}
             audio_bytes = b64.b64decode(audio_base64) if audio_base64 else b""
@@ -739,7 +728,7 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
                             [{"role": "system", "content": (
                                 f"[QQ群聊记录] {her_name} 使用QQ插件在群 {group_id}"
                                 + (f"（账号 {login_id}）" if login_id else "")
-                                + f" 聊了以下内容：\n"
+                                + " 聊了以下内容：\n"
                                 + "\n".join(f"{user_label if m['role']=='user' else her_name}: {m['content']}" for m in messages[-8:])
                             )}],
                             timeout=3.0,
@@ -1020,13 +1009,18 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
     )
     async def upload_sticker(self, filename: str = "", data_base64: str = "", desc: str = "", **_):
         """上传表情包图片并注册"""
-        import base64 as b64, json as _json, os as _os
+        import base64 as b64
+        import json as _json
+        import os as _os
         fname = str(filename or "").strip()
         description = str(desc or "").strip()
         raw_b64 = str(data_base64 or "").strip()
-        if not fname: return Err(SdkError("INVALID_INPUT: filename 不能为空"))
-        if not raw_b64: return Err(SdkError("INVALID_INPUT: data_base64 不能为空"))
-        if not description: return Err(SdkError("INVALID_INPUT: desc 不能为空"))
+        if not fname:
+            return Err(SdkError("INVALID_INPUT: filename 不能为空"))
+        if not raw_b64:
+            return Err(SdkError("INVALID_INPUT: data_base64 不能为空"))
+        if not description:
+            return Err(SdkError("INVALID_INPUT: desc 不能为空"))
         sticker_dir, sticker_json = self._sticker_paths()
         _os.makedirs(sticker_dir, exist_ok=True)
         # 处理 base64（可能带 data:image/...;base64, 前缀）
@@ -1079,11 +1073,13 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
     )
     async def register_sticker(self, image_path: str = "", desc: str = "", **_):
         """注册表情包到 sticker.json"""
-        import json, os
+        import os
         path = str(image_path or "").strip()
         description = str(desc or "").strip()
-        if not path: return Err(SdkError("INVALID_INPUT: image_path 不能为空"))
-        if not description: return Err(SdkError("INVALID_INPUT: desc 不能为空"))
+        if not path:
+            return Err(SdkError("INVALID_INPUT: image_path 不能为空"))
+        if not description:
+            return Err(SdkError("INVALID_INPUT: desc 不能为空"))
         sticker_dir, sticker_json = self._sticker_paths()
         full_path = os.path.join(sticker_dir, path)
         if not os.path.exists(full_path):
@@ -1120,8 +1116,8 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         进程崩溃（宿主收到 error=None）。因此这里捕获异常返回明确错误，绝不崩溃进程。
         """
         try:
-            import tkinter.filedialog as fd
             import tkinter as tk
+            import tkinter.filedialog as fd
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
@@ -1261,7 +1257,7 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
                 with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                     all_lines = f.readlines()
                 n = max(1, min(int(lines or 100), 500))
-                return Ok({"lines": [l.rstrip("\n\r") for l in all_lines[-n:]], "total": n, "source": "file"})
+                return Ok({"lines": [ln.rstrip("\n\r") for ln in all_lines[-n:]], "total": n, "source": "file"})
             except Exception as e:
                 return Ok({"lines": [], "total": 0, "message": str(e)})
         return Ok({"lines": [], "total": 0, "message": "暂无日志（缓冲区为空且未找到日志文件）"})
@@ -1274,7 +1270,6 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
     )
     async def list_stickers(self, **_):
         """列出所有已注册表情包"""
-        import json, os
         _sticker_dir, sticker_json = self._sticker_paths()
         try:
             with open(sticker_json, "r", encoding="utf-8") as f:
@@ -1795,7 +1790,6 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         input_schema={"type": "object", "properties": {}},
     )
     async def get_user_profiles(self, **_):
-        import time
         profiles: list[dict[str, Any]] = []
         now = time.time()
         cache = getattr(self.session_instruction_service, "_user_profile_cache", {}) or {}
@@ -1898,13 +1892,22 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
             default_text = ""
             if not is_runtime:
                 from .prompt_fragment_templates import (
-                    ROLE_PROMPT_SECTION, ATTENTION_PROMPT_SECTION, CHARACTER_PROMPT_SECTION,
-                    TIME_PROMPT_SECTION, DETAIL_CONSTRAINTS_SECTION, OUTPUT_PROMPT_SECTION,
-                    FORMAT_PROMPT_SECTION, FORMAT_PROMPT_SECTION_NEKO_DYNAMIC, FORMAT_PROMPT_SECTION_OPEN_PLATFORM,
+                    ATTENTION_PROMPT_SECTION,
+                    CHARACTER_PROMPT_SECTION,
+                    DETAIL_CONSTRAINTS_SECTION,
+                    FORMAT_PROMPT_SECTION,
+                    FORMAT_PROMPT_SECTION_NEKO_DYNAMIC,
+                    FORMAT_PROMPT_SECTION_OPEN_PLATFORM,
+                    OUTPUT_PROMPT_SECTION,
+                    ROLE_PROMPT_SECTION,
+                    TIME_PROMPT_SECTION,
                 )
                 from .scene_prompt_templates import (
-                    SCENE_COLLECTIVE_GROUP, SCENE_DIRECTED_GROUP,
-                    SCENE_KIRA_UNIFIED_GROUP, SCENE_SHARED_GROUP, SCENE_PRIVATE_CHAT,
+                    SCENE_COLLECTIVE_GROUP,
+                    SCENE_DIRECTED_GROUP,
+                    SCENE_KIRA_UNIFIED_GROUP,
+                    SCENE_PRIVATE_CHAT,
+                    SCENE_SHARED_GROUP,
                 )
                 default_map = {
                     "role_prompt_section": ROLE_PROMPT_SECTION,

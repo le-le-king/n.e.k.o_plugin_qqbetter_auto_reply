@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re as _re
 import time
 from typing import Any, Optional
 
-import re as _re
 import httpx
 import websockets
 
@@ -231,7 +231,7 @@ class QQOpenPlatformConnection(QQConnectionBase):
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
         await self._refresh_token()
         if self.logger:
-            self.logger.info(f"[QQOpenPlatform] token 已获取")
+            self.logger.info("[QQOpenPlatform] token 已获取")
         ws_url = await self._get_gateway_url()
         if self.logger:
             self.logger.info(f"[QQOpenPlatform] 连接网关: {ws_url[:60]}...")
@@ -397,8 +397,10 @@ class QQOpenPlatformConnection(QQConnectionBase):
                     if self.logger:
                         self.logger.warning("[QQOpenPlatform] 服务端要求重连")
                     if self._ws:
-                        try: await self._ws.close()
-                        except Exception: pass
+                        try:
+                            await self._ws.close()
+                        except Exception:
+                            pass
                     self._ws = None
                     self.ws = None
                 # op==7 及其他未知 op → 不 continue，自然落到重连逻辑
@@ -707,9 +709,12 @@ class QQOpenPlatformConnection(QQConnectionBase):
                     return
                 # 清理旧连接
                 if self._ws:
-                    try: await self._ws.close()
-                    except Exception: pass
-                self._ws = None; self.ws = None
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                self._ws = None
+                self.ws = None
                 # 重新连接 + 握手（优先 Resume 补发遗漏事件）
                 await self._refresh_token()
                 ws_url = await self._get_gateway_url()
@@ -759,7 +764,8 @@ class QQOpenPlatformConnection(QQConnectionBase):
 
     async def _upload_group_image(self, group_id: str, image_url: str) -> str:
         """上传群聊图片到 QQ 开放平台，返回 file_info 或空串"""
-        import os, mimetypes
+        import mimetypes
+        import os
         image_url = str(image_url or "").strip()
         if not image_url:
             return ""

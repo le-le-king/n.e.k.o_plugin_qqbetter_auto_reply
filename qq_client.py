@@ -15,6 +15,8 @@ transport：把唯一出站 socket 装进 ``_main_client`` / ``_connected_client
 由 ``_forward_receive_loop`` 单任务收流并在断线后自动重拨。
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import re
@@ -26,6 +28,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from .message_chain import File, MessageChain
 from .qq_connection import QQConnectionBase
 
 #: 「商城表情 / 收藏表情」的段类型。LLBot 上报用 ``market_face``，
@@ -996,8 +999,17 @@ class QQClient(QQConnectionBase):
     async def _build_message_chain(self, msg_data: dict[str, Any], *, depth: int = 0, seen: set[str] | None = None) -> "MessageChain":
         """将 OneBot 消息 dict 转为 MessageChain，递归展开引用/转发。"""
         from .message_chain import (
-            MessageChain, Text, Image, At, Reply, Forward, Emoji, Record,
-            JsonCard, XmlCard, File, Sticker,
+            At,
+            Emoji,
+            Forward,
+            Image,
+            JsonCard,
+            MessageChain,
+            Record,
+            Reply,
+            Sticker,
+            Text,
+            XmlCard,
         )
         if seen is None:
             seen = set()
@@ -1185,7 +1197,6 @@ class QQClient(QQConnectionBase):
 
     async def _build_forward_chains(self, forward_data: dict[str, Any], *, depth: int = 0, seen: set[str] | None = None) -> "list[MessageChain]":
         """从 get_forward_msg 返回构建 MessageChain 列表，每条子消息带时间戳。"""
-        from .message_chain import MessageChain, Text
         messages = forward_data.get("messages") or forward_data.get("data", {}).get("messages") or []
         if not isinstance(messages, list):
             return []
@@ -1199,7 +1210,6 @@ class QQClient(QQConnectionBase):
 
     async def _fetch_reply_content(self, message: Dict[str, Any], reply_ids: list[str]) -> None:
         """递归展开引用链：通过 get_msg API 构建嵌套 MessageChain。"""
-        from .message_chain import MessageChain
         seen: set[str] = set()
         chains: list[MessageChain] = []
         first_sender_id = ""
@@ -1328,6 +1338,7 @@ class QQClient(QQConnectionBase):
         """
         import re
         from pathlib import Path as _Path
+
         import httpx
 
         renders: list[str] = []

@@ -25,7 +25,7 @@ import asyncio
 import re
 import ssl
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from main_logic.tool_calling import ToolDefinition
 
@@ -93,7 +93,6 @@ def extract_target(raw: Any) -> BiliTarget | None:
 async def _resolve_short(url: str) -> str:
     """跟一次 302，把 b23.tv 换成真链接。失败返回空串。"""
     import aiohttp
-
     import certifi
 
     ctx = ssl.create_default_context(cafile=certifi.where())

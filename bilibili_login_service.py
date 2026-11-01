@@ -25,7 +25,7 @@ import base64
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 #: 二维码有效期。B 站官方是 180 秒，这里判松一点，过期了让重新生成。
 _QR_TTL_SECONDS = 180
