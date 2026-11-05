@@ -60,13 +60,28 @@ class QQReplyPostprocessNode:
 
         if not text:
             return text
-        cleaned = _re.sub(r"</?[|｜]{1,2}\s*DSML\s*[|｜]{1,2}[^>]*>", "", text, flags=_re.I)
-        # 有些实现吐的是 ASCII 竖线版本，或者把竖线丢了，只剩 <DSML ...>
-        cleaned = _re.sub(r"</?[|｜]{0,2}\s*DSML[^>]*>", "", cleaned, flags=_re.I)
-        # 闭合标签是 `</｜｜DSML｜｜ invoke>`——斜杠卡在 DSML 前面，上面两条
-        # （要求 `<` 后紧跟竖线）匹配不到，2026-11-01 13:13 就漏发出去了：
-        # 对方收到一条只写着 "</｜｜DSML｜｜ invoke> </｜｜DSML｜｜ calls>" 的消息。
-        cleaned = _re.sub(r"</\s*[|｜]{0,2}\s*DSML[^>]*>", "", cleaned, flags=_re.I)
+        # 变体无关的 DSML 标记剥除（2026-11-01 二次事故修正）。
+        #
+        # DeepSeek 的 DSML 工具调用语法在流式输出里会以文本形式漏进正文，
+        # 且形态五花八门，之前按"管道夹 DSML"的固定形状写正则，漏了一堆：
+        #   - 管道符号：| (U+007C)、｜ (U+FF5C 全角)、‖ (U+2016 双竖线)
+        #   - V4.1 带前导空格：`｜DSML｜ calls`（管道与 DSML、DSML 与标签名
+        #     之间都有空格），旧正则要求 `<` 后紧跟管道，匹配不到
+        #   - 闭合标签：`</｜DSML｜ invoke>`，斜杠卡在 DSML 前面
+        #   - 标签家族不止 calls，还有 invoke / parameter / tool_calls 等
+        #
+        # 这里统一成一条"变体无关"正则：可选斜杠 + 可选管道（|｜‖ 一到两个）
+        # + 可选空白 + 字面 DSML（大小写不敏感）+ 直到 `>` 的任意内容。
+        # 只要标记里含 DSML 字样且被尖括号包住，就整体删掉，壳里的文字留着。
+        marker = (
+            r"</?"
+            r"(?:[|｜‖]{1,2}\s*)?"
+            r"DSML"
+            r"(?:\s*[|｜‖]{1,2})?"
+            r"(?:\s+[^>]*)?"
+            r"\s*>"
+        )
+        cleaned = _re.sub(marker, "", text, flags=_re.I)
         # 删完可能留下孤零零的空壳行
         cleaned = _re.sub(r"[ \t]+\n", "\n", cleaned)
         cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned)
