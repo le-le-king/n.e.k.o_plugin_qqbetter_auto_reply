@@ -62,14 +62,15 @@ _HARD_RULES = (
     "要求：就像真人随手发一条消息，1 到 2 句就够，口语，不要分点罗列，"
     "不要总结，不要连着问好几个问题，不要说「有什么可以帮你」，"
     "不要提现在几点，也不要解释你为什么发这条。"
+    "绝对不许编造你没真的刷到、看到或发生的事——只能聊给到你的视频素材，"
+    "或者你自己的真实状态和想法。"
 )
 
 #: 搭话的"开口方式"。用户的原话是"给她搭话的命令，而不是机械地命令她一定要
 #: 发一个视频"——所以这里给的是几个口吻样例，不是任务。她照着说也行，说别的
 #: 也行；提不提视频、提哪条，都由她自己定。
 _HOOK_HINTS = (
-    "上面这些你爱提就提，不提也行——不想聊视频就随便说点别的，"
-    "今天想到的一件小事、问他在忙什么、随口吐槽一句，都行。\n"
+    "上面这些是你今天真实刷到的视频，你想提就提，不提也行。\n"
     "想说视频就照平时的口气开口，比如：\n"
     "  「刚刷到一个视频，笑死我了」\n"
     "  「你猜我今天刷到啥」\n"
@@ -79,6 +80,12 @@ _HOOK_HINTS = (
     "要是想把那条也发给他看，就在消息最后单独写一行，只写方括号和编号——"
     "你提的是上面第 5 条就写 [5]，第 2 条就写 [2]，照着对应关系写，别照抄例句里的数字。"
     "这行字不是给他看的，不用解释；不写就不发链接。网址你也别自己写。\n"
+    "不想提视频，就说你自己真实的事——问他最近在忙什么、说说你自己此刻的状态"
+    "（在发呆、有点困、刚醒）都行。\n"
+    "【绝对不许编】你没真的刷到、真的看到、真的发生的事，一个字都别编。"
+    "禁止编造「我刷到一个视频」「我看到一只猫」「今天我出门遇到」这类"
+    "你根本没有真实依据的事件——你只能聊上面列出的视频，或者你自己真实的"
+    "状态和想法。没有素材就老实说没有，或者直接问他一句，别硬造。\n"
 )
 
 
@@ -311,6 +318,40 @@ class QQProactivePrivateService:
 
         return True, "", rec
 
+    # ── 搭话前刷新见闻 ──
+
+    async def _refresh_notes_before_talk(self) -> None:
+        """搭话前先刷一批新见闻，让她有新鲜素材可聊。
+
+        设计约束：
+        - 刷不动、超时、异常，一律静默放过，绝不挡搭话——退回用见闻库里
+          已有的旧素材。她没话聊比「卡住不聊」强得多。
+        - 用 wait_for 兜底，防止 browse_once 内部某一步（模型选片、深看）
+          卡死把整次搭话也拖死。
+        """
+        browse = getattr(self.plugin, "bilibili_browse_service", None)
+        if browse is None:
+            return
+        refresh = getattr(browse, "browse_once", None)
+        if not callable(refresh):
+            return
+
+        timeout_s = float(self._cfg("proactive_private_refresh_timeout", 75) or 75)
+        try:
+            result = await asyncio.wait_for(refresh(), timeout=timeout_s)
+            ok = bool(result.get("ok")) if isinstance(result, dict) else False
+            if ok:
+                self._logger.info("[ProactivePrivate] 搭话前已刷新见闻")
+            else:
+                reason = result.get("reason") if isinstance(result, dict) else "未知"
+                self._logger.info(f"[ProactivePrivate] 搭话前刷新见闻未成（{reason}），沿用旧素材")
+        except asyncio.TimeoutError:
+            self._logger.warning(
+                f"[ProactivePrivate] 搭话前刷新见闻超时（>{timeout_s:.0f}s），沿用旧素材"
+            )
+        except Exception:
+            self._logger.warning("[ProactivePrivate] 搭话前刷新见闻异常，沿用旧素材", exc_info=True)
+
     # ── 提示词 ──
 
     async def _build_prompt(
@@ -523,6 +564,12 @@ class QQProactivePrivateService:
             if not chosen:
                 self.last_skip_reason = reason or "无符合条件的目标"
                 return {"sent": False, "reason": self.last_skip_reason}
+
+            # 搭话前先刷一批新见闻，让她有新鲜素材可聊。刷取失败、超时都不该
+            # 挡着搭话——退回用见闻库里已有的旧素材，绝不能因为刷不动就卡住
+            # 或干脆不搭话。这里的等待时长设成比 browse_once 正常耗时略宽，
+            # 真正超时了也照常往下走。
+            await self._refresh_notes_before_talk()
 
             prompt, picked = await self._build_prompt(chosen, idle_seconds)
             self._logger.info(
