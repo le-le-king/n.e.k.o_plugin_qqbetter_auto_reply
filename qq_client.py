@@ -1494,6 +1494,12 @@ class QQClient(QQConnectionBase):
                         self.logger.info(f"Queued private message from {message.get('user_id')}")
                     else:
                         self.logger.info(f"Queued group message from group {message.get('group_id')}, user {message.get('user_id')}")
+                # 界面日志（只报"到了"，不带正文）：以前这里只写文件日志，
+                # 排查"她不回消息"时界面一片安静，没法一眼区分「消息根本
+                # 没进插件」和「进了但下游丢了」——2026-11-07 排查朋友的
+                # 实例时被迫绕了一大圈才定位到 LLBot 侧没推消息。
+                _qwhere = "私聊" if msg_type == "private" else f"群 {message.get('group_id')}"
+                self._emit_log("INFO", f"[收到消息] {_qwhere} from {message.get('user_id')}")
         elif message.get("post_type") == "notice" and message.get("notice_type") == "notify" and message.get("sub_type") == "poke":
             # 戳一戳事件：入队以便自动回戳
             if not self._message_queue:

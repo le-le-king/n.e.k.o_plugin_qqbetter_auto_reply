@@ -593,6 +593,9 @@ class QQProactivePrivateService:
 
             self._note_proactive_sent(chosen)
             text = await self._ensure_video_link(text, picked, chosen)
+            # 这一轮现在走的是真实会话（persist_memory=True、非临时会话），
+            # 她说的话由主链路自己落库，不再在这里补写。补写只对旧版临时
+            # 会话有意义，两手都做会写成两条。
             self._logger.info(f"[ProactivePrivate] 已发送 → {chosen}: {text[:60]}")
             self.plugin._emit_log("INFO", f"主动私聊已发送给 {chosen}")
             return {

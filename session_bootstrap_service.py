@@ -11,6 +11,19 @@ from utils.llm_client import AIMessage
 
 from .pipeline_models import QQReplyContext
 
+# 一轮对话里允许几轮工具调用。
+#
+# 原来是 1，理由是"压住工具轮的最坏超时"（每多一次迭代就多一整段 LLM 流，
+# 而超时的代价是丢弃整个共享群会话）。但 1 次根本不够用：提示词里教的图库
+# 流程是"先 browse_gallery 看编号，再 set_avatar 换"，这就是两次调用。
+# 第一次用完额度后，模型想再调就只能把调用当正文吐出来（DeepSeek 会直接
+# 输出 `｜｜DSML｜｜ invoke` 的原始标记），管线既不执行、又剥成空字符串
+# 发出去——现象是"她答应了但什么都没发生"（2026-11-05 换头像就是这么没的）。
+#
+# 改成 5 次：够"查资料 → 看详情 → 动手做"这种三步链，也不至于让模型把
+# 工具当聊天刷。超时预算在 reply_generation_service 里按迭代数重新算过。
+MAX_TOOL_ITERATIONS = 5
+
 
 def generation_session_is_reusable(
     entry: Optional[dict[str, Any]],
@@ -234,15 +247,21 @@ class QQSessionBootstrapService:
                 model=model,
                 on_text_delta=on_text_delta,
                 on_response_discarded=on_response_discarded,
-                # 一轮只允许一次召回：给这轮的检索定死一次的预算，也压住
-                # 工具轮的最坏超时（每多一次迭代就多一整段 LLM 流，而这里
-                # 超时的代价是丢弃整个共享群会话）。封顶后 forced-finalize
-                # 会摘掉 tools 逼出最终文本，召回结果不会白拿。
-                max_tool_iterations=1,
+                # 额度见 MAX_TOOL_ITERATIONS：原来是 1（"压住最坏超时"），
+                # 但一步的预算走不完"先查再动手"的两步工具链，超时预算已在
+                # reply_generation_service 里按这个常量重算。跑到顶之后
+                # forced-finalize 会摘掉 tools 逼出最终文本，已拿到的工具
+                # 结果不会白费。
+                max_tool_iterations=MAX_TOOL_ITERATIONS,
             )
             await asyncio.wait_for(
                 user_session.connect(instructions=context.system_prompt),
                 timeout=self.plugin._ai_connect_timeout_seconds,
+            )
+            # 会话是按创建时刻的额度定死的（复用的会话不会改）。留一行，
+            # 排查"为什么她只调了一次工具就不动了"时能直接看这个值。
+            self.plugin.logger.info(
+                f"[工具诊断] 会话已建立: max_tool_iterations={MAX_TOOL_ITERATIONS}"
             )
 
             created = {

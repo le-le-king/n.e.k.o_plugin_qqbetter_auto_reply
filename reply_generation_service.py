@@ -23,7 +23,15 @@ from .search_tool_service import (
     SEARCH_TOOL_HTTP_TIMEOUT_SECONDS,
     SEARCH_TOOL_NAME,
 )
+from .session_bootstrap_service import MAX_TOOL_ITERATIONS
 from .sticker_service import SAVE_TOOL_NAME, SEND_TOOL_NAME
+
+# 工具轮超时预算里，LLM 流那部分最多折算几段。
+#
+# 额度是 MAX_TOOL_ITERATIONS（5），理论上最坏 6 段流。但一段流正常只有
+# 10~20 秒，6 段也就两分钟；真按 6×60 秒给预算，卡死的那一轮会把会话锁
+# 占满七分钟（群聊里就是全群停摆），比直接判超时丢一轮更难收拾。
+TOOL_TURN_STREAM_CAP = 4
 
 
 class QQReplyGenerationService:
@@ -169,6 +177,21 @@ class QQReplyGenerationService:
                         )
             stage_trace.metadata["recalled_memory_used"] = context.recalled_memory_used
             stage_trace.metadata["recalled_memory_length"] = len(context.recalled_memory_text)
+            if synthetic_hist_before is not None:
+                # 合成控制轮（主动搭话等）的 human 行是捏造的指令，不是任何人
+                # 真说过的话。写记忆之前先登记进排除名单——否则私聊 /cache 会
+                # 把"[系统] 现在去主动找他说话……"连同六条视频候选一起当成
+                # 主人说的话落库，下一轮她会自己接着念这段指令。
+                # 超时分支另有一处调用（抢救要先排除再结算），两处都按对象
+                # 身份去重，重复调用无副作用。
+                try:
+                    self.plugin.session_memory_service.record_synthetic_prompt_rows(
+                        session_key, synthetic_hist_before,
+                    )
+                except Exception as exclude_error:
+                    self.plugin.logger.warning(
+                        f"合成轮 prompt 行排除失败（不影响回复）: {exclude_error}"
+                    )
             if not ai_reply:
                 self.plugin.logger.warning("AI 未生成回复，准备进入 fallback")
                 stage_trace.status = "empty"
@@ -320,16 +343,20 @@ class QQReplyGenerationService:
             try:
                 turn_timeout = self.plugin._ai_turn_timeout_seconds
                 if armed_turn_tools:
-                    # 工具轮的最坏路径是 2 次完整 LLM 流（初始流 + 封顶后的
-                    # forced-finalize；插件会话 max_tool_iterations=1）加一次
-                    # 召回 HTTP，再加一次联网检索（自带 16s 预算，含补搜），
-                    # 再加一次打开链接（自带 16s 预算），最后还可能看一条
-                    # B 站视频（自带 30s 预算：4~5 个请求 + 节流）。
-                    # 沿用单流预算会把"慢但会成功"的工具轮变成超时——而这条
-                    # 路径超时的代价不是丢一轮，是丢弃整个共享群会话再打粘性
-                    # 标记。
+                    # 工具轮的最坏路径是「初始流 + 每次工具迭代各一段流」，
+                    # 额度 MAX_TOOL_ITERATIONS 时理论上是 6 段 LLM 流，再加
+                    # 各工具自带的预算（召回 5s、检索 16s 含补搜、打开链接
+                    # 16s、看一条 B 站视频 30s）。沿用单流预算会把"慢但会
+                    # 成功"的工具轮变成超时——而这条路径超时的代价不是丢一
+                    # 轮，是丢弃整个共享群会话再打粘性标记。
+                    #
+                    # 但也不能真的按 6×单轮预算给：正常一段流 10~20 秒，6 段
+                    # 两分钟就够；真撞到这个封顶说明模型在空转，让它继续占着
+                    # 会话锁（群里就是全群停摆七分钟）比丢弃这一轮更糟。所以
+                    # LLM 那部分最多按 TOOL_TURN_STREAM_CAP 段算。
                     turn_timeout = (
-                        turn_timeout * 2
+                        turn_timeout
+                        * min(MAX_TOOL_ITERATIONS + 1, TOOL_TURN_STREAM_CAP)
                         + RECALL_TOOL_HTTP_TIMEOUT_SECONDS
                         + SEARCH_TOOL_HTTP_TIMEOUT_SECONDS
                         + OPEN_TOOL_HTTP_TIMEOUT_SECONDS
@@ -677,10 +704,10 @@ class QQReplyGenerationService:
     def _build_search_tool_handler(self, search_service: Any):
         """This turn's search_web execution closure.
 
-        一轮只放一次检索：``max_tool_iterations=1`` 之后客户端会摘掉
-        tools，但同一轮里模型仍可能并排发两个 search_web 调用，每个都是
-        一段 4-8 秒的宿主 HTTP。第二次直接复用上次输出，不再打接口——
-        这条路径上多一次等待就可能顶穿生成侧的超时，代价是丢整个会话。
+        一轮只放一次检索：同一轮里模型可能并排发两个 search_web 调用
+        （额度 MAX_TOOL_ITERATIONS 下更常见），每个都是一段 4-8 秒的
+        宿主 HTTP。第二次直接复用上次输出，不再打接口——这条路径上多
+        一次等待就可能顶穿生成侧的超时，代价是丢整个会话。
         """
 
         last_output: list[str] = []
@@ -946,7 +973,7 @@ class QQReplyGenerationService:
         assistant output and remains in the outbound buffer.
         """
 
-        # 一轮一次召回的闸在 handler 层：max_tool_iterations=1 只限 LLM/
+        # 一轮一次召回的闸在 handler 层：max_tool_iterations 只限 LLM/
         # tool 循环轮数，模型在同一个 assistant 回复里可以并排发多个
         # recall_memory 调用（客户端会逐个执行），流内重试也会再次进
         # tool 轮——每次都是一段 5s HTTP，会击穿超时预算里"一次召回"的
@@ -1175,6 +1202,16 @@ class QQReplyGenerationService:
             snapshot["allow_cross_group_context"] = bool(
                 settings.get("allow_cross_group_context", False)
             )
+        if getattr(context, "owner_private_section", ""):
+            snapshot["cross_domain_owner_memory"] = bool(
+                settings.get("cross_domain_owner_memory", False)
+            )
+        if getattr(context, "owner_longterm_section", ""):
+            # 长期记忆与最近对话是两个开关：只关掉长期记忆的用户，那一段
+            # 也不能带着旧事发到群里。
+            snapshot["cross_domain_owner_longterm_memory"] = bool(
+                settings.get("cross_domain_owner_longterm_memory", False)
+            )
         return snapshot
 
     def _store_consent_snapshot(self, context: Any, snapshot: dict) -> None:
@@ -1246,6 +1283,18 @@ class QQReplyGenerationService:
             system_prompt = self._strip_section_text(
                 system_prompt, getattr(context, "cross_group_section", "") or "",
             )
+        if not settings.get("cross_domain_owner_memory", False):
+            # 主人私聊→群的注入段：与跨群段同窗口复检（开关关掉后，群里
+            # 这条回复不得再带着私聊原文发出去）。
+            system_prompt = self._strip_section_text(
+                system_prompt, getattr(context, "owner_private_section", "") or "",
+            )
+        if not settings.get("cross_domain_owner_longterm_memory", False):
+            # 长期记忆段同理，但它有自己的开关：两段各撤各的，不能因为
+            # 只关了长期记忆就把最近聊到的几句也一并抹掉。
+            system_prompt = self._strip_section_text(
+                system_prompt, getattr(context, "owner_longterm_section", "") or "",
+            )
         return system_prompt, recalled_text
 
     @staticmethod
@@ -1310,7 +1359,16 @@ class QQReplyGenerationService:
             try:
                 # member turn 已在主生成完成点单点记录（含空回复轮）；此处
                 # 只做 cache 同步，避免同一发言重复入 bucket。
-                count = await self.plugin._cache_session_delta(session_key, user_data)
+                # 合成私聊轮（主动搭话）的回复直接发送、不经 buffer，尾部
+                # ai 行当轮即为定局，和指令行一起送去过滤——指令被排除名单
+                # 挡掉，她说出口的话照常入库。普通轮仍滞后一拍等投递决策。
+                count = await self.plugin._cache_session_delta(
+                    session_key, user_data,
+                    sync_tail_ai=(
+                        not context.is_group
+                        and is_synthetic_source(getattr(context, "source_kind", ""))
+                    ),
+                )
                 if count:
                     self.plugin.logger.info(f"[管理员] 成功同步 {count} 条消息到 Memory Server (会话: {session_key})")
             except Exception as e:

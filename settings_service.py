@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import math
+import shutil
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from .group_permission import GroupPermissionManager
 from .permission import PermissionManager
+from .scheduled_greeting_service import normalize_entries as normalize_greeting_entries
 
 
 class QQSettingsService:
@@ -194,6 +197,10 @@ class QQSettingsService:
         self, *, group_memory_before: bool, group_memory_after: bool,
         member_memory_before: bool, member_memory_after: bool,
         cross_group_before: bool | None, cross_group_after: bool | None = None,
+        cross_domain_before: bool | None = None,
+        cross_domain_after: bool | None = None,
+        cross_domain_longterm_before: bool | None = None,
+        cross_domain_longterm_after: bool | None = None,
         participant_memory_before: bool | None = None,
         participant_memory_after: bool | None = None,
         participant_markers_created: list[
@@ -216,6 +223,10 @@ class QQSettingsService:
             member_memory_after=member_memory_after,
             cross_group_before=cross_group_before,
             cross_group_after=cross_group_after,
+            cross_domain_before=cross_domain_before,
+            cross_domain_after=cross_domain_after,
+            cross_domain_longterm_before=cross_domain_longterm_before,
+            cross_domain_longterm_after=cross_domain_longterm_after,
             participant_memory_before=participant_memory_before,
             participant_memory_after=participant_memory_after,
             participant_markers_created=participant_markers_created,
@@ -357,6 +368,10 @@ class QQSettingsService:
         member_memory_before: bool, member_memory_after: bool,
         cross_group_before: bool | None = None,
         cross_group_after: bool | None = None,
+        cross_domain_before: bool | None = None,
+        cross_domain_after: bool | None = None,
+        cross_domain_longterm_before: bool | None = None,
+        cross_domain_longterm_after: bool | None = None,
         participant_memory_before: bool | None = None,
         participant_memory_after: bool | None = None,
         participant_markers_created: list[
@@ -387,6 +402,35 @@ class QQSettingsService:
                     "WARNING",
                     "跨群上下文开关变更未能写盘，已回滚运行时策略",
                 )
+        if (
+            cross_domain_before is not None
+            and cross_domain_after is not None
+            and cross_domain_before != cross_domain_after
+        ):
+            # 纯读取开关（注入时读活会话内存，无会话级结算），回滚 flag
+            # 即可。与跨群同向：留着新值会让群轮在"从未成功保存的授权"
+            # 下把主人私聊原文拼进发到群里的回复。
+            self.plugin._qq_settings["cross_domain_owner_memory"] = (
+                cross_domain_before
+            )
+            self.plugin._emit_log(
+                "WARNING",
+                "私聊→群记忆开关变更未能写盘，已回滚运行时策略",
+            )
+        if (
+            cross_domain_longterm_before is not None
+            and cross_domain_longterm_after is not None
+            and cross_domain_longterm_before != cross_domain_longterm_after
+        ):
+            # 同为纯读取开关：留着新值，群轮会在"从未成功保存的授权"下把
+            # 主人私聊长期记忆的原文拼进发到群里的回复。
+            self.plugin._qq_settings["cross_domain_owner_longterm_memory"] = (
+                cross_domain_longterm_before
+            )
+            self.plugin._emit_log(
+                "WARNING",
+                "私聊长期记忆→群开关变更未能写盘，已回滚运行时策略",
+            )
         if (
             identity_probe_before is not None
             and identity_probe_after is not None
@@ -903,6 +947,105 @@ class QQSettingsService:
         async with self._consent_transaction_lock:
             return await self._save_settings_locked(**kwargs)
 
+    def _normalize_gallery_dir(self, value: Any) -> str:
+        """把图库目录归一成"绝对路径"或"空串"。
+
+        空串的语义是「用默认的 <data>/gallery」，不是「不要图库」——
+        后者会让收图整条链路静默失效，不该由一次输入空值触发。
+
+        另外挡两类能把人绕晕的输入：
+
+        - 相对路径：见 gallery_service.root_dir 的注释，猜错就散架；
+        - 指到一个已存在的**文件**上：mkdir(parents=True) 会在这一步
+          抛 FileExistsError，而调用方在收图路径里，异常会被吞成
+          「这张图没存下」，看起来像图库随机丢图。
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        # 允许用户手打带引号的路径（从资源管理器复制粘贴常见）
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+            raw = raw[1:-1].strip()
+        try:
+            path = Path(raw)
+        except (OSError, ValueError):
+            self.plugin._emit_log("WARNING", f"图库目录无法解析，已回退默认: {raw!r}")
+            return ""
+        if not path.is_absolute():
+            self.plugin._emit_log(
+                "WARNING", f"图库目录必须是绝对路径，已回退默认: {raw!r}",
+            )
+            return ""
+        if path.exists() and not path.is_dir():
+            self.plugin._emit_log(
+                "WARNING", f"图库目录指向的是一个文件，已回退默认: {path}",
+            )
+            return ""
+        return str(path)
+
+    def _gallery_root(self) -> Path:
+        """当前图库目录（跟着配置走）。"""
+        svc = getattr(self.plugin, "gallery_service", None)
+        if svc is not None:
+            try:
+                return svc.root_dir()
+            except Exception:
+                pass
+        raw = str((self.plugin._qq_settings or {}).get("gallery_dir") or "").strip()
+        if raw and Path(raw).is_absolute():
+            return Path(raw)
+        return Path(self.plugin.data_path()) / "gallery"
+
+    async def _relocate_gallery(self, old_root: Path) -> None:
+        """换图库目录时把旧库搬过去。
+
+        为什么必须搬，而不是「新图存新盘、旧图留旧盘」：index.json 里的
+        file 是相对路径（blobs/xxx），两份各存一半之后，界面能列出条目、
+        点开却是坏图——这种状态最容易被当成"插件把图弄丢了"。
+
+        只在目标没有已有图库时搬（index.json 不存在），不覆盖用户在那边
+        攒的东西。搬不动就把配置改回去并报错，绝不留下两个半截库。
+        """
+        # 这里**不**依赖 gallery_service 是否存在：目录路径本身从配置就能算
+        # 出来。早期版本在这里 `if svc is None: return`，结果是「服务没起来
+        # 的那次保存，配置指向了一个空目录，而图还在原处」——比不搬更糟。
+        new_root = self._gallery_root()
+        if new_root == old_root:
+            return
+        if not old_root.is_dir():
+            return
+        if (new_root / "index.json").exists():
+            self.plugin._emit_log(
+                "INFO", f"目标目录已有图库，保留原有内容不搬迁: {new_root}",
+            )
+            return
+
+        def _move() -> int:
+            new_root.mkdir(parents=True, exist_ok=True)
+            moved = 0
+            for entry in old_root.iterdir():
+                target = new_root / entry.name
+                if target.exists():
+                    continue
+                shutil.move(str(entry), str(target))
+                moved += 1
+            return moved
+
+        try:
+            moved = await asyncio.to_thread(_move)
+            self.plugin._emit_log(
+                "INFO", f"图库已搬迁到 {new_root}（{moved} 项）",
+            )
+        except Exception as exc:
+            # 搬失败就把配置退回去：那份配置指向一个空目录，而真图还在
+            # 原处，留着它只会让「图库空了」变成一个查不出来的现象。
+            self.plugin._qq_settings["gallery_dir"] = str(old_root)
+            self.plugin._emit_log(
+                "ERROR",
+                f"图库搬迁失败，已保留原目录 {old_root}: {type(exc).__name__}: {exc}",
+            )
+            raise ValueError(f"图库目录搬迁失败，已保留原目录: {exc}") from exc
+
     async def _save_settings_locked(self, **kwargs: Any) -> dict[str, Any]:
         onebot_url = kwargs.get("onebot_url")
         token = kwargs.get("token")
@@ -944,6 +1087,95 @@ class QQSettingsService:
         local_stt_url = kwargs.get("local_stt_url")
         if local_stt_url is not None:
             self.plugin._qq_settings["local_stt_url"] = str(local_stt_url or "").strip()
+        # ── 图库目录 ──
+        # 只收绝对路径。相对路径一律当"没填"处理并回空（= 用默认目录）：
+        # 相对谁都能解释得通，猜错一次图就散在找不到的地方，而用户看到的
+        # 现象是"图库空了"。宁可回默认，也不要悄悄写到 cwd 底下。
+        gallery_dir = kwargs.get("gallery_dir")
+        if gallery_dir is not None:
+            old_gallery_root = self._gallery_root()
+            self.plugin._qq_settings["gallery_dir"] = self._normalize_gallery_dir(gallery_dir)
+            await self._relocate_gallery(old_gallery_root)
+        # ── 私聊主动搭话 ──
+        # 这三项不属于采集授权（不往持久日志写别人的东西），所以不用走
+        # consent 的延迟发布，就地写、随同一次落盘生效。
+        proactive_private_enabled = kwargs.get("proactive_private_enabled")
+        if proactive_private_enabled is not None:
+            self.plugin._qq_settings["proactive_private_enabled"] = bool(proactive_private_enabled)
+            self.plugin._emit_log(
+                "INFO",
+                "私聊主动搭话已" + ("开启" if self.plugin._qq_settings["proactive_private_enabled"] else "关闭"),
+            )
+        for key, floor, ceiling in (
+            ("proactive_private_min_idle_minutes", 1.0, 10080.0),
+            ("proactive_private_min_gap_minutes", 0.0, 10080.0),
+            ("proactive_private_daily_limit", 0.0, 500.0),
+            ("proactive_private_check_interval_seconds", 20.0, 3600.0),
+        ):
+            raw = kwargs.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} 必须是数字")
+            # NaN / inf 能过 float()，但落进配置后会让所有比较都变成假，
+            # 表现为「主动搭话再也不触发」且日志一片安静。
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError(f"{key} 必须是有限数字")
+            clamped = min(max(value, floor), ceiling)
+            if clamped != value:
+                self.plugin._emit_log("WARNING", f"{key} 超出范围，已钳到 {clamped}")
+            self.plugin._qq_settings[key] = (
+                int(clamped) if float(clamped).is_integer() else clamped
+            )
+        # ── 定时搭话 ──
+        # 同主动搭话：不属于采集授权，就地写、随同一次落盘生效。
+        scheduled_enabled = kwargs.get("scheduled_greeting_enabled")
+        if scheduled_enabled is not None:
+            self.plugin._qq_settings["scheduled_greeting_enabled"] = bool(scheduled_enabled)
+            self.plugin._emit_log(
+                "INFO",
+                "定时搭话已" + ("开启" if self.plugin._qq_settings["scheduled_greeting_enabled"] else "关闭"),
+            )
+        scheduled_greetings = kwargs.get("scheduled_greetings")
+        if scheduled_greetings is not None:
+            # 清洗（丢掉时间非法/指令空白的条目）在 normalize_entries 里做；
+            # 这里只负责把洗完的结果落进配置。条目变了不需要重启插件——
+            # 服务循环每轮从 _qq_settings 现读，下一拍就是新配置。
+            cleaned = normalize_greeting_entries(scheduled_greetings)
+            self.plugin._qq_settings["scheduled_greetings"] = cleaned
+            self.plugin._emit_log("INFO", f"定时搭话条目已更新（{len(cleaned)} 条有效）")
+        sched_interval = kwargs.get("scheduled_greeting_check_interval_seconds")
+        if sched_interval is not None:
+            try:
+                value = float(sched_interval)
+            except (TypeError, ValueError):
+                raise ValueError("scheduled_greeting_check_interval_seconds 必须是数字")
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError("scheduled_greeting_check_interval_seconds 必须是有限数字")
+            clamped = min(max(value, 10.0), 3600.0)
+            if clamped != value:
+                self.plugin._emit_log("WARNING", f"scheduled_greeting_check_interval_seconds 超出范围，已钳到 {clamped}")
+            self.plugin._qq_settings["scheduled_greeting_check_interval_seconds"] = (
+                int(clamped) if float(clamped).is_integer() else clamped
+            )
+        # ── B 站刷视频 ──
+        bilibili_browse_enabled = kwargs.get("bilibili_browse_enabled")
+        if bilibili_browse_enabled is not None:
+            self.plugin._qq_settings["bilibili_browse_enabled"] = bool(bilibili_browse_enabled)
+            self.plugin._emit_log(
+                "INFO",
+                "B站刷视频已" + ("开启" if self.plugin._qq_settings["bilibili_browse_enabled"] else "关闭"),
+            )
+        bilibili_interval = kwargs.get("bilibili_browse_interval_minutes")
+        if bilibili_interval is not None:
+            try:
+                value = int(float(bilibili_interval))
+            except (TypeError, ValueError):
+                raise ValueError("bilibili_browse_interval_minutes 必须是数字")
+            # 5 分钟是下限：再短就不是"刷着玩"，是拿账号去撞风控。
+            self.plugin._qq_settings["bilibili_browse_interval_minutes"] = min(max(value, 5), 1440)
         if napcat_directory is not None:
             self.plugin._qq_settings["napcat_directory"] = str(napcat_directory or "").strip()
         if show_napcat_window is not None:
@@ -1052,6 +1284,23 @@ class QQSettingsService:
         retroactive_review_max_reply = kwargs.get("retroactive_review_max_reply")
         if retroactive_review_max_reply is not None:
             self.plugin._qq_settings["retroactive_review_max_reply"] = max(1, int(retroactive_review_max_reply))
+        # 跨域注入的窗口长度不是授权开关，跟着保存直接生效；下限 2 是为了
+        # 至少凑出「主人一句 + 她一句」，上限 40 挡住把整个私聊搬进群 prompt。
+        cross_domain_rounds = kwargs.get("cross_domain_owner_context_rounds")
+        if cross_domain_rounds is not None:
+            self.plugin._qq_settings["cross_domain_owner_context_rounds"] = min(
+                40, max(2, int(cross_domain_rounds)),
+            )
+        # 长期记忆段的字符上限：同样不是授权开关，跟着保存直接生效。
+        # 下限 200 防止配成 0 后整段等于没注入，上限 4000 挡住把整个记忆库
+        # 搬进群 prompt。
+        cross_domain_longterm_chars = kwargs.get(
+            "cross_domain_owner_longterm_max_chars"
+        )
+        if cross_domain_longterm_chars is not None:
+            self.plugin._qq_settings["cross_domain_owner_longterm_max_chars"] = min(
+                4000, max(200, int(cross_domain_longterm_chars)),
+            )
         enable_group_attention = kwargs.get("enable_group_attention")
         if enable_group_attention is not None:
             self.plugin._qq_settings["enable_group_attention"] = bool(enable_group_attention)
@@ -1072,6 +1321,14 @@ class QQSettingsService:
         cross_group_before = bool(
             self.plugin._qq_settings.get("allow_cross_group_context", False)
         )
+        cross_domain_before = bool(
+            self.plugin._qq_settings.get("cross_domain_owner_memory", False)
+        )
+        cross_domain_longterm_before = bool(
+            self.plugin._qq_settings.get(
+                "cross_domain_owner_longterm_memory", False,
+            )
+        )
         identity_probe_before = bool(
             self.plugin._qq_settings.get("qq_open_identity_probe_enabled", False)
         )
@@ -1085,6 +1342,13 @@ class QQSettingsService:
             "group_member_memory_enabled",
             "private_participant_memory_enabled",
             "allow_cross_group_context",
+            # 私聊→群 的跨域注入同属披露授权：打开后群轮会把主人私聊
+            # 的原文拼进 prompt，回复发在群里。写盘失败的授权是从未
+            # 成立的授权，但那条回复已经说出去了，收不回来。
+            "cross_domain_owner_memory",
+            # 长期记忆同属披露授权：打开后群轮会把主人私聊攒下的事拼进
+            # prompt，回复发在群里，与上面那条同一条边界。
+            "cross_domain_owner_longterm_memory",
             # 取证开关同属采集授权：打开后每条消息都会把发送者 ID 落进
             # **持久**日志文件，而写盘失败的授权是从未成立的授权——落下的
             # 行不会跟着回滚。关掉照旧立刻生效（多关一会儿只是保守）。
@@ -1196,6 +1460,18 @@ class QQSettingsService:
                 bool(self.plugin._qq_settings.get("allow_cross_group_context", False))
                 if cross_group_before is not None else None
             ),
+            cross_domain_before=cross_domain_before,
+            cross_domain_after=(
+                bool(self.plugin._qq_settings.get("cross_domain_owner_memory", False))
+                if cross_domain_before is not None else None
+            ),
+            cross_domain_longterm_before=cross_domain_longterm_before,
+            cross_domain_longterm_after=(
+                bool(self.plugin._qq_settings.get(
+                    "cross_domain_owner_longterm_memory", False,
+                ))
+                if cross_domain_longterm_before is not None else None
+            ),
             participant_memory_before=participant_memory_before,
             participant_memory_after=participant_memory_after,
             participant_markers_created=participant_markers_created,
@@ -1230,7 +1506,99 @@ class QQSettingsService:
             self.plugin.qq_client.token = self.plugin._qq_settings.get("token", self.plugin.qq_client.token)
         if onebot_url is not None or token is not None or napcat_directory is not None or show_napcat_window is not None or qq_connection_mode is not None or qq_open_app_id is not None or qq_open_client_secret is not None:
             self.plugin._startup_error = None
+        # 连接字段真的变了且正在运行 → 后台自动 stop+start，让新配置立刻
+        # 生效。以前只提示"需重启自动回复"，而 start_auto_reply 在 _running
+        # 时直接返回 already_running——用户看到提示去点"启动"等于没点，
+        # 配置永远不生效（2026-11-07 朋友的实例就是这么卡在旧通道上的）。
+        connection_changed = bool(
+            self.plugin._running
+            and (
+                onebot_url is not None
+                or token is not None
+                or napcat_directory is not None
+                or show_napcat_window is not None
+                or qq_connection_mode is not None
+                or qq_open_app_id is not None
+                or qq_open_client_secret is not None
+            )
+        )
+        if connection_changed:
+            self._schedule_reconnect_after_save()
+        # 定时搭话的开关/条目变了：只同步它自己的循环，不动整个自动回复。
+        # 循环每拍都现读配置，真正必须做的只是「开关关了要停循环」和
+        # 「循环死了要拉起来」。发送失败自己会在下一拍重试，无需在这里管。
+        if success and (
+            scheduled_enabled is not None
+            or scheduled_greetings is not None
+            or sched_interval is not None
+        ):
+            self._sync_scheduled_greeting_loop()
         return {
             "persisted": success,
             "reconnect_required": bool(self.plugin._running),
         }
+
+    def _sync_scheduled_greeting_loop(self) -> None:
+        """定时搭话配置变更后，把它自己的循环同步到最新开关状态。"""
+        service = getattr(self.plugin, "scheduled_greeting_service", None)
+        if service is None:
+            return
+
+        async def _sync() -> None:
+            enabled = bool(self.plugin._qq_settings.get("scheduled_greeting_enabled", False))
+            try:
+                if not enabled:
+                    if service.running:
+                        await service.stop()
+                else:
+                    # start() 自身幂等（已在跑就跳过）；循环每拍现读配置，
+                    # 条目/间隔的变更无需重启循环。
+                    await service.start()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.plugin.logger.warning(
+                    "[ScheduledGreet] 保存后同步循环失败", exc_info=True,
+                )
+
+        try:
+            asyncio.get_running_loop().create_task(_sync())
+        except RuntimeError:
+            # 没有事件循环（极早的保存路径）就不同步：start_auto_reply
+            # 会按配置把循环拉起来。
+            pass
+
+    def _schedule_reconnect_after_save(self) -> None:
+        """连接配置变更后自动重启自动回复（带防抖，多次保存只重启一次）。"""
+        existing = getattr(self, "_reconnect_task", None)
+        if existing is not None and not existing.done():
+            # 已有一轮重启在路上：它启动时会读最新配置，无需再排一轮。
+            return
+
+        async def _restart() -> None:
+            try:
+                # 等保存响应先返回给前端、磁盘写定，再动连接。1s 不够：
+                # 真机实测 save 入口在 persist 完成后仍可能被宿主 run 框架
+                # 挂着（响应还没导出），1s 时 stop 会把整个 save 调用取消
+                # （前端收到 Execution cancelled，虽然配置其实已写盘）。
+                # 3s 给响应导出留足余量，用户感知上仍是"保存完自己重启"。
+                await asyncio.sleep(3.0)
+                ops = getattr(self.plugin, "runtime_ops_service", None)
+                if ops is None:
+                    return
+                self.plugin._emit_log("INFO", "连接配置已变更，正在自动重启以应用新连接...")
+                await ops.stop_auto_reply()
+                await asyncio.sleep(0.5)
+                await ops.start_auto_reply()
+                self.plugin._emit_log("INFO", "自动重启完成，新连接配置已生效")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # 重启失败不能吞掉：告诉用户手动恢复的路径。
+                self.plugin._emit_log(
+                    "WARN",
+                    f"自动重启失败（{type(e).__name__}），请手动停止后再点启动",
+                )
+                self.plugin.logger.warning(f"[AutoReconnect] restart failed: {type(e).__name__}: {e}")
+
+        self._reconnect_task = asyncio.get_running_loop().create_task(_restart())

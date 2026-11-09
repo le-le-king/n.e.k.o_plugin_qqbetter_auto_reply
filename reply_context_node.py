@@ -104,6 +104,39 @@ class QQReplyContextNode:
         self.plugin.logger.info("跨群上下文已在生成前撤除（授权已关闭）")
         return system_prompt, False
 
+    def _strip_owner_private_if_revoked(
+        self, system_prompt: str, section_text: str,
+        *, setting_key: str = "cross_domain_owner_memory",
+        label: str = "私聊→群记忆",
+    ) -> tuple[str, bool]:
+        """Returns (prompt, section_kept)。
+
+        对偶 _strip_cross_group_if_revoked：私聊→群 的注入段同样是跨域
+        披露，开关在 login/bootstrap/recall 的 await 窗口里被关掉时，不得
+        让主人私聊的原文留在一小时后发到群里的 prompt 里。
+
+        ``setting_key`` 让「最近对话」与「长期记忆」各撤各的：只关掉长期
+        记忆的用户，不该连最近聊到的几句也一起丢掉。"""
+        if not section_text:
+            return system_prompt, False
+        if bool(
+            (getattr(self.plugin, "_qq_settings", {}) or {}).get(
+                setting_key, False,
+            )
+        ):
+            return system_prompt, True
+        separator = "\n\n"
+        for candidate in (
+            separator + section_text,
+            section_text + separator,
+            section_text,
+        ):
+            if candidate in system_prompt:
+                system_prompt = system_prompt.replace(candidate, "", 1)
+                break
+        self.plugin.logger.info(f"{label}已关闭，注入段在生成前撤除")
+        return system_prompt, False
+
     async def build(
         self,
         *,
@@ -450,6 +483,16 @@ class QQReplyContextNode:
             system_prompt,
             getattr(instruction_bundle, "cross_session_section", ""),
         )
+        system_prompt, owner_private_alive = self._strip_owner_private_if_revoked(
+            system_prompt,
+            getattr(instruction_bundle, "owner_private_section", ""),
+        )
+        system_prompt, owner_longterm_alive = self._strip_owner_private_if_revoked(
+            system_prompt,
+            getattr(instruction_bundle, "owner_longterm_section", ""),
+            setting_key="cross_domain_owner_longterm_memory",
+            label="私聊长期记忆→群",
+        )
         self.plugin._emit_log("INFO", f"[UserMsg] (system {len(system_prompt)}字) {prompt_message[:200]}")
 
         return QQReplyContext(
@@ -501,6 +544,14 @@ class QQReplyContextNode:
             cross_session_section=(
                 getattr(instruction_bundle, "cross_session_section", "")
                 if cross_session_alive else ""
+            ),
+            owner_private_section=(
+                getattr(instruction_bundle, "owner_private_section", "")
+                if owner_private_alive else ""
+            ),
+            owner_longterm_section=(
+                getattr(instruction_bundle, "owner_longterm_section", "")
+                if owner_longterm_alive else ""
             ),
             # 只剩 bootstrap 段这一个构建期来源：召回侧的 participant 域是
             # 生成中途才可能读到的，由 execute_recall 命中 member 域时置位。

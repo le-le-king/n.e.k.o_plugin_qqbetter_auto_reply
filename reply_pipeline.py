@@ -14,6 +14,7 @@ from .pipeline_models import (
     QQReplyOutcome,
     QQReplyRequest,
     delivered_blocks_text,
+    is_synthetic_source,
 )
 from .reply_buffer_service import QQReplyBufferService
 
@@ -147,6 +148,22 @@ class QQReplyPipelineRunner:
         return outcome
 
     async def _run_context(self, request: QQReplyRequest, decision: QQReplyDecision) -> QQReplyContext:
+        # 群消息的 decision.permission_level 是**群的准入等级**（trusted/open/
+        # normal），不是发言人的用户权限。历史上它被原样当成"发言人权限"传进
+        # 上下文层，导致身份确认段（permission_level == "admin"）在群里从未
+        # 触发——主人在群里说话，她从来不知道那是主人，跨域私聊注入同样被
+        # 这道判据挡死。这里用接收边界盖过章的发言人权限纠正：主人在群里
+        # 说话就按主人对待，**与跨域记忆开关无关**（认主人 ≠ 带私聊记忆，
+        # 后者仍由 cross_domain_owner_memory 单独门控）。
+        # 合成轮（buffer 合并/主动搭话/入群欢迎）的 sender_id 只是占位符，
+        # 不做管理员覆盖；旁路调用者没盖发言人章（None）时维持旧行为。
+        effective_permission = decision.permission_level
+        if (
+            request.is_group
+            and not is_synthetic_source(getattr(request, "source_kind", ""))
+            and str(getattr(request, "group_speaker_permission_level_at_receipt", None) or "") == "admin"
+        ):
+            effective_permission = "admin"
         return await self.plugin.reply_context_node.build(
             message=request.message_text,
             permission_level=(
@@ -157,7 +174,7 @@ class QQReplyPipelineRunner:
                         request, "private_permission_level_at_receipt", None,
                     ) is not None
                 )
-                else decision.permission_level
+                else effective_permission
             ),
             sender_id=request.sender_id,
             attachments=request.attachments,
@@ -324,15 +341,37 @@ class QQReplyPipelineRunner:
             # 私聊默认等更久（对方在讲故事/连续输出）
             first_text = delivery_plan.blocks[0].text if delivery_plan.blocks else ""
             visible_text = delivered_blocks_text(delivery_plan.blocks)
-            # 检查是否有实际内容（text/record/sticker/poke/emoji 任一非空即有效）
+            # 判据只认投递计划里真实可发的块（text/record/sticker/poke/emoji/
+            # keyboard/ark 任一非空即有效）。
+            # 不能把 clean 也算进来：模型经常输出「<msg></msg> + 一段内心独白」，
+            # clean 去标签后那段独白是非空的，于是这里放行、进缓冲，1.5 秒后
+            # deliver 拿到的却是空块，`if not text: continue` 静默跳过——现象是
+            # 「AI 生成回复完成」但群里一条都没有，且日志一片安静。
+            # 纯文本模型输出不受影响：_parse_blocks 对无 <msg> 的文本会回退成
+            # 单个 text 块，这里照样判为有内容。
             has_content = any(
                 b.text or b.record or b.sticker or b.poke or b.emoji
+                or b.keyboard or b.ark
                 for b in (delivery_plan.blocks or [])
             )
-            # clean 可能含 <msg></msg>，去标签后再判空
+            # 仅用于日志：说清楚"为什么判空"（模型给了独白但没给正文）
             clean_stripped = re.sub(r"<[^>]+>", "", clean).strip() if clean else ""
-            if not has_content and not clean_stripped:
-                # LLM 决定不回复（<msg></msg>），跳过缓冲
+            if not has_content:
+                # LLM 决定不回复（<msg></msg>），跳过缓冲。
+                # 这条路径原先完全静默，事后只能翻 raw 输出猜，必须留痕。
+                self.plugin._emit_log(
+                    "DEBUG",
+                    f"[Buffer] 无可投递内容，跳过：blocks={len(delivery_plan.blocks or [])} "
+                    f"clean={clean_stripped[:30]!r}",
+                )
+                if getattr(self.plugin, "logger", None):
+                    # 落到文件：clean 非空说明模型说了话但没装进 <msg>，
+                    # 属于模型输出格式问题，看日志才能判断要不要调提示词。
+                    self.plugin.logger.info(
+                        f"[Buffer] 本轮无投递内容，跳过（replied=False）: "
+                        f"blocks={len(delivery_plan.blocks or [])} "
+                        f"clean_len={len(clean_stripped)}"
+                    )
                 from .pipeline_models import QQDeliveryResult
                 return QQDeliveryResult(delivered=False, target_type=delivery_plan.target_type, target_id=delivery_plan.target_id, reply_text=None)
             session_key = self.plugin._build_session_key(
@@ -598,6 +637,7 @@ class QQReplyPipelineRunner:
                 "group_member_memory_enabled",
                 "private_participant_memory_enabled",
                 "allow_cross_group_context",
+                "cross_domain_owner_memory",
             )
         }
 

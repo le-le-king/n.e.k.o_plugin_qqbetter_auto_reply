@@ -285,11 +285,35 @@ class QQSessionMemoryService:
                 text = str(content)
             if not text:
                 continue
+            if role == "assistant":
+                # 工具调用轮的 ai 行是模型原始输出：正文可能一个字都没有，
+                # 整段只剩 <｜｜DSML｜｜ calls> 这类标记。直接落库，她"记得"
+                # 的自己发言就成了一堆乱码——2026-11-05 21:44 在 recent.json
+                # 里抓到过一条，内容是 set_avatar 的调用标记。清洗后为空就
+                # 整条丢掉：那一轮她本来就没说出话。
+                text = self._clean_ai_memory_text(text)
+                if not text:
+                    continue
             memory_messages.append({
                 "role": role,
                 "content": [{"type": "text", "text": text}],
             })
         return memory_messages
+
+    @staticmethod
+    def _clean_ai_memory_text(text: str) -> str:
+        """还原成她真正说出口的那句话，再写记忆。
+
+        放成独立方法是为了让"哪些文本进了记忆"这件事只有一处口径：私聊
+        /cache、群 digest、participant digest 全走 conversation_slice_to_memory_messages。
+
+        除了剥工具调用标记，还要去掉 `<msg><text>` 外壳、`<feeling>` 和
+        只有编号的角标块——这些是投递格式，不是话。不清的话记忆里她的
+        发言会长这样：`<msg><text>石楠花味儿的酸奶……</text></msg>`。
+        """
+        from .reply_postprocess_node import QQReplyPostprocessNode
+
+        return QQReplyPostprocessNode.memory_text(text)
 
     async def post_memory_history(self, endpoint: str, her_name: str, messages: list[dict[str, Any]], timeout: float = 5.0) -> dict[str, Any]:
         return await self.plugin.memory_bridge.post_memory_history(endpoint, her_name, messages, timeout=timeout)
@@ -354,9 +378,11 @@ class QQSessionMemoryService:
         """Synthetic control turns (rapid-fire flush / proactive speech) run
         the full pipeline, appending a fabricated human instruction row to
         the shared history. Record those rows into the exclusion list so
-        digest/cache never extracts them as participant utterances; the
-        delivered ai reply rows stay. Callers must take history_len_before
-        INSIDE the session lock or a racing real user row gets mis-captured."""
+        digest/cache never extracts them as a real utterance; the delivered
+        ai reply rows stay. Applies to group digests and to private legacy
+        /cache alike — both go through conversation_slice_to_memory_messages.
+        Callers must take history_len_before INSIDE the session lock or a
+        racing real user row gets mis-captured."""
         user_data = (getattr(self.plugin, "_user_sessions", {}) or {}).get(
             session_key
         )
@@ -435,8 +461,11 @@ class QQSessionMemoryService:
                 )
             return inserted
 
-        if not user_data.get("is_group"):
-            return 0
+        # 私聊 legacy 走的也是 conversation_slice_to_memory_messages，同一份
+        # 排除名单对它同样生效。主动搭话现在按真实对话入库
+        # （persist_memory=True），塞给她的"[系统] 你去主动找他说话"是捏造
+        # 的指令行——不排除掉，长期记忆里就成了"主人说过让他主动搭话"，
+        # 下一轮她会自己接着念这段指令。
         rows = user_data.setdefault("undelivered_draft_rows", [])
         for msg in history[max(0, baseline):]:
             msg_type = getattr(msg, "type", "")
@@ -671,7 +700,10 @@ class QQSessionMemoryService:
             )
             del messages[:-self.GROUP_MEMBER_HARD_LIMIT]
 
-    async def cache_session_delta(self, session_key: str, user_data: dict[str, Any]) -> int:
+    async def cache_session_delta(
+        self, session_key: str, user_data: dict[str, Any], *,
+        sync_tail_ai: bool = False,
+    ) -> int:
         # Busy group chats use one scoped extraction at session finalization.
         # Feeding each group turn into the legacy /cache pipeline would both
         # increase LLM cost and contaminate legacy-private memory.
@@ -750,11 +782,16 @@ class QQSessionMemoryService:
         # 晚于此处）。滞后一拍——本轮回复留给下一次 cache/finalize，那时
         # 排除名单已定型；用户消息照常先落库。
         history_upper = len(conversation_history)
-        while (
-            history_upper > start_index
-            and getattr(conversation_history[history_upper - 1], "type", "") == "ai"
-        ):
-            history_upper -= 1
+        # 主动搭话这类合成轮没有 buffer 在等（回复是直接发出去的），尾部
+        # ai 行不可能随后被 summary 取代，当轮就该入库——否则她说完之后
+        # 用户不回消息，这条回复要等到下一轮才进记忆库，中途宿主重启就
+        # 永久丢了。普通轮仍滞后一拍，等投递决策定型。
+        if not sync_tail_ai:
+            while (
+                history_upper > start_index
+                and getattr(conversation_history[history_upper - 1], "type", "") == "ai"
+            ):
+                history_upper -= 1
         delta_messages = self.conversation_slice_to_memory_messages(
             conversation_history[:history_upper], start_index, user_data=user_data,
         )

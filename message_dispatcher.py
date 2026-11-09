@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import pathlib
+import re as _re
 from typing import Any, Optional
 
 from .feedback_classifier import QQFeedbackClassifier
@@ -1184,8 +1185,19 @@ class QQMessageDispatcher:
 
         # 焦点群/近焦点群：输出 LLM 自行判断的结果
         if strategy_mode == "neko_dynamic" and not is_at_bot:
-            if outcome.action == "reply" and outcome.reply_text:
+            # outcome.reply_text 可能是 <msg></msg>（长度 11，非空字符串），
+            # 只看它会把「决定回复但没内容」误报成「决定回复」——上一版就是
+            # 这么误导排查方向的。必须按真实可投递内容判。
+            _deliverable = any(
+                b.text or b.record or b.sticker or b.poke or b.emoji
+                or b.keyboard or b.ark
+                for b in (getattr(outcome, "blocks", None) or [])
+            )
+            _visible = _re.sub(r"<[^>]+>", "", str(outcome.reply_text or "")).strip()
+            if outcome.action == "reply" and (_deliverable or _visible):
                 self.plugin._emit_log("INFO", f"[LLM自判] 决定回复: {outcome.reply_text[:40]}")
+            elif outcome.action == "reply":
+                self.plugin._emit_log("INFO", "[LLM自判] 决定回复但内容为空，本条不发")
             else:
                 self.plugin._emit_log("INFO", "[LLM自判] 决定不回复")
 

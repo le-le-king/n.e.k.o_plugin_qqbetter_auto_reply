@@ -70,6 +70,8 @@ class QQGalleryService:
         self._items: dict[str, dict[str, Any]] = {}
         self._next_id = 1
         self._loaded = False
+        #: 载入时用的目录。跟当前 root_dir() 不一致就说明用户换盘了。
+        self._loaded_root: Optional[Path] = None
         self._dirty = False
         self._save_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
@@ -88,11 +90,33 @@ class QQGalleryService:
             "avatar_unverified": 0,
             #: 单次 set_qq_avatar 调用抛异常的次数（重试前的原始失败）
             "avatar_err": 0,
+            #: 配了相对路径、被回退到默认目录的次数。不为零说明 UI 那边
+            #: 塞了半截路径进来，比"图库突然空了"好查得多。
+            "dir_rejected_relative": 0,
+            #: 存储目录变更后重新载入的次数。
+            "reloaded_on_dir_change": 0,
         }
 
     # ── 路径 ────────────────────────────────────────────────
 
     def root_dir(self) -> Path:
+        """图库根目录。可以由 ``gallery_dir`` 配置改到别的盘。
+
+        为什么不跟着 ``data_path()`` 走：图库是会一直长大的东西（上限
+        1200 张），而插件数据目录往往在系统盘上。用户换个大一点的盘是
+        合理需求，写死就没法换。
+
+        相对路径一律不认。相对谁都能解释得通（进程 cwd？插件目录？
+        数据目录？），猜错一次图就散在一个谁也找不到的地方，而且下次
+        启动时看着像"图库被清空了"。宁可回退到默认目录并记一笔。
+        """
+        settings = getattr(self.plugin, "_qq_settings", None) or {}
+        raw = str(settings.get("gallery_dir") or "").strip()
+        if raw:
+            candidate = Path(raw)
+            if candidate.is_absolute():
+                return candidate
+            self._diag["dir_rejected_relative"] += 1
         return self.plugin.data_path() / "gallery"
 
     def blobs_dir(self) -> Path:
@@ -171,6 +195,17 @@ class QQGalleryService:
     # ── 载入 / 落盘 ─────────────────────────────────────────
 
     async def start(self) -> None:
+        current_root = self.root_dir()
+        # 用户在引导里换了存储目录：内存里这份是旧目录的索引，必须丢掉。
+        # 不丢的后果很隐蔽——新图按新目录写 index.json，旧图元数据还在
+        # 内存里，于是「界面上有图、点开是空的」，重启后两边各记一半。
+        if self._loaded and self._loaded_root != current_root:
+            self._loaded = False
+            self._items = {}
+            self._next_id = 1
+            self._diag["reloaded_on_dir_change"] += 1
+            if self.logger:
+                self.logger.info(f"[Gallery] 存储目录已变更，重新载入: {current_root}")
         if self._loaded:
             return
         self.root_dir().mkdir(parents=True, exist_ok=True)
@@ -180,6 +215,8 @@ class QQGalleryService:
             if self.logger:
                 self.logger.warning(f"[Gallery] 载入索引失败: {type(exc).__name__}: {exc}")
             self._loaded = True
+        # 记下这份索引属于哪个目录，供下次 start() 判断要不要重载。
+        self._loaded_root = current_root
         # 投喂目录里有图就顺手收进来。失败只记日志——图库读不了不该
         # 拖垮插件启动。
         try:

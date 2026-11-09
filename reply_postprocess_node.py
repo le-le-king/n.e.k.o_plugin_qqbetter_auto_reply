@@ -5,6 +5,46 @@ from typing import Any
 
 from .pipeline_models import QQDeliveryPlan, QQMessageBlock, QQModelResult, QQReplyContext, QQReplyOutcome
 
+#: 模型工具调用标记的正则（变体无关）。DSML 会以文本形式漏进正文，具体
+#: 形态见 `_strip_tool_leak` 的注释。记忆侧复用同一条——会话历史里存的是
+#: 模型原始输出，工具调用轮整段都是标记，不清洗就写进 /cache，她"记得"
+#: 的自己发言会变成一堆 `<｜｜DSML｜｜ calls>`。
+_DSML_MARKER = (
+    r"</?"
+    r"(?:[|｜‖]{1,2}\s*)?"
+    r"DSML"
+    r"(?:\s*[|｜‖]{1,2})?"
+    r"(?:\s+[^>]*)?"
+    r"\s*>"
+)
+
+#: 工具调用的**参数块**整段（连参数值一起）剥掉：
+#:
+#:     <｜｜DSML｜｜ parameter name="index" string="true">g9</｜｜DSML｜｜ parameter>
+#:
+#: 只删标记的话，剥完还剩一个孤零零的 `g9`——那既不是她要说的话，也不是
+#: 用户看得到的东西，写进记忆只会让她"记得自己说过 g9"。parameter 里的
+#: 是参数值，和 invoke 壳里的正文（`<...invoke name="msg">还是403` 的
+#: `403`）性质不同，所以只对 parameter 成对挖空，invoke 壳保留。
+_DSML_PARAM_BLOCK = (
+    r"<[^<>]*DSML[^<>]*parameter[^<>]*>"
+    r".*?"
+    r"</[^<>]*DSML[^<>]*parameter\s*>"
+)
+
+#: `<feeling>` 连内容一起删——`annoyed` 是给表情/动作引擎的指令，不是话。
+_FEELING_BLOCK = r"<feeling>.*?</feeling>"
+
+#: 回复结构标签（`<msg>` `<text>` `<record>` …）。发送侧要它们，记忆侧不要：
+#: 写进记忆的应当是她**说出口的那句话**，而不是模型输出的 XML 外壳。
+_STRUCT_TAG = (
+    r"</?(?:msg|text|emoji|mark|forward|record|sticker|poke|keyboard|at|reply|ark)"
+    r"\b[^>]*>"
+)
+
+#: 整块只有编号（`[6]`）——她自己标视频用的角标，不是话。
+_INDEX_ONLY = r"^[\[\(（【]?\s*\d{1,2}\s*[\]\)）】]?$"
+
 
 class QQReplyPostprocessNode:
     def __init__(self, plugin: Any):
@@ -73,16 +113,63 @@ class QQReplyPostprocessNode:
         # 这里统一成一条"变体无关"正则：可选斜杠 + 可选管道（|｜‖ 一到两个）
         # + 可选空白 + 字面 DSML（大小写不敏感）+ 直到 `>` 的任意内容。
         # 只要标记里含 DSML 字样且被尖括号包住，就整体删掉，壳里的文字留着。
-        marker = (
-            r"</?"
-            r"(?:[|｜‖]{1,2}\s*)?"
-            r"DSML"
-            r"(?:\s*[|｜‖]{1,2})?"
-            r"(?:\s+[^>]*)?"
-            r"\s*>"
-        )
-        cleaned = _re.sub(marker, "", text, flags=_re.I)
+        cleaned = _re.sub(_DSML_PARAM_BLOCK, "", text, flags=_re.I | _re.S)
+        cleaned = _re.sub(_DSML_MARKER, "", cleaned, flags=_re.I)
         # 删完可能留下孤零零的空壳行
+        cleaned = _re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def strip_dsml(text: str) -> str:
+        """对外的纯文本清洗：只剥工具调用标记，不解析 `<msg>` 结构。
+
+        发送侧到这里就够了——结构化的块要按类型分别投递（文字/表情/语音/
+        戳一戳），提前解析等于替她改口。记忆侧要的是另一回事，见
+        `memory_text`。
+        """
+        return QQReplyPostprocessNode._strip_tool_leak(text)
+
+    @staticmethod
+    def memory_text(raw: str) -> str:
+        """把模型原始输出还原成"用户真正看到的那句话"，用于写记忆。
+
+        会话历史里存的是模型原文，直接落库就会带着 `<msg><text>` 外壳。
+        2026-11-05 在 recent.json 里抓到过整条是
+        `<msg><text>石楠花味儿的酸奶……</text></msg>` 的记录，还有
+        `<feeling>annoyed</feeling>` 和整块只有 `[6]` 的角标块。
+
+        这些都不是话：`<feeling>` 是给表情引擎的指令，`[6]` 是她自己标
+        视频用的编号，`<msg>` 是投递格式。解析成纯文本**不改一个字**，
+        只是把外壳去掉——多个 `<msg>` 各自一块，按顺序拼回来。
+        """
+        import re as _re
+
+        text = QQReplyPostprocessNode.strip_dsml(str(raw or ""))
+        if not text:
+            return ""
+        text = _re.sub(_FEELING_BLOCK, "", text, flags=_re.I | _re.S)
+        if "<msg>" in text or "<msg " in text:
+            try:
+                blocks = QQReplyPostprocessNode._parse_blocks(text)
+            except Exception:
+                blocks = []
+            parts = []
+            for block in blocks:
+                value = str(
+                    getattr(block, "record", "") or getattr(block, "text", "") or ""
+                ).strip()
+                if not value or _re.match(_INDEX_ONLY, value):
+                    continue
+                parts.append(value)
+            if parts:
+                return "\n".join(parts).strip()
+            if blocks:
+                # 只发了表情包/戳一戳/角标：这一轮她没有"说"任何话。
+                # 不能退回下面的剥标签路径——那会留下 `<sticker>5</sticker>`
+                # 里的 `5`，变成她"记得自己说过 5"。
+                return ""
+        cleaned = _re.sub(_STRUCT_TAG, "", text, flags=_re.I)
         cleaned = _re.sub(r"[ \t]+\n", "\n", cleaned)
         cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
@@ -487,7 +574,13 @@ class QQReplyPostprocessNode:
                 forward_mark=mark_flag,
             )
         strategy_mode = getattr(self.plugin, "_strategy_mode", "neko_dynamic")
-        is_forced = getattr(context, "force_reply", False) or context.permission_level == "admin"
+        # 管理员强制只适用私聊：群聊里即使主人说话，模型也常会合理选择沉默
+        # （主人在跟其他群友聊、话题与她无关）。群轮的 permission_level 现在
+        # 可能是 "admin"（发言人是主人时的身份覆盖），若不排除会把「决定不
+        # 回复」覆盖成默认回复「嗯嗯~」，变成主人每说话她都插一句。
+        is_forced = getattr(context, "force_reply", False) or (
+            not context.is_group and context.permission_level == "admin"
+        )
         if strategy_mode == "neko_dynamic" and not is_forced:
             return QQReplyOutcome(
                 action="reply",

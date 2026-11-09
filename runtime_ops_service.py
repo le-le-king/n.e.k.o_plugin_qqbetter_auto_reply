@@ -85,6 +85,14 @@ class QQRuntimeOpsService:
                 except Exception:
                     # 这个循环起不来不该让整个自动回复启动失败
                     self.plugin.logger.warning("私聊主动搭话循环启动失败", exc_info=True)
+            # 定时搭话同理：到点检查是独立循环。start() 自身幂等，保存设置
+            # 那条路径可能已经把它拉起来了，这里再调一次不会重复。
+            scheduled_greeting = getattr(self.plugin, "scheduled_greeting_service", None)
+            if scheduled_greeting:
+                try:
+                    await scheduled_greeting.start()
+                except Exception:
+                    self.plugin.logger.warning("定时搭话循环启动失败", exc_info=True)
             self.plugin._startup_error = None
             self.plugin._running = True
             getattr(self.plugin, "_spawn_push_ui_event", lambda *a, **k: None)("status")  # 运行状态翻转 → SSE 通知前端
@@ -141,6 +149,12 @@ class QQRuntimeOpsService:
                 await proactive_private.stop()
             except Exception:
                 self.plugin.logger.warning("私聊主动搭话循环停止失败", exc_info=True)
+        scheduled_greeting = getattr(self.plugin, "scheduled_greeting_service", None)
+        if scheduled_greeting:
+            try:
+                await scheduled_greeting.stop()
+            except Exception:
+                self.plugin.logger.warning("定时搭话循环停止失败", exc_info=True)
         housekeeping = getattr(self.plugin, "_session_housekeeping_task", None)
         if housekeeping:
             # housekeeping 循环可能正处在 idle finalize 内：先取消并等它
@@ -231,8 +245,58 @@ class QQRuntimeOpsService:
 
 
 class QQProactiveMessageService:
+    #: 主动搭话那段指令的开头（`proactive_private_service._build_prompt`
+    #: 生成）。用来认出会话历史里哪一行是它——按文案匹配，不按位置，
+    #: 免得把用户真说的话压掉。
+    INSTRUCTION_PREFIX = "你现在想主动给主人发一条"
+
+    #: 发完之后留在历史里的替代行。她要记住的只是"我主动开过口"，
+    #: 那六条候选视频和一堆约束发完就没用了。
+    INSTRUCTION_MARKER = "[系统] 你已经主动给他发了条消息，下面那句是你说的。"
+
     def __init__(self, plugin: Any):
         self.plugin = plugin
+
+    def _session_history_len(self, session_key: str) -> int:
+        user_data = (getattr(self.plugin, "_user_sessions", {}) or {}).get(session_key)
+        if not isinstance(user_data, dict):
+            return 0
+        session = user_data.get("session")
+        return len(getattr(session, "_conversation_history", None) or [])
+
+    def _compress_instruction_row(self, session_key: str, hist_before: int) -> None:
+        """发完之后把几千字的搭话指令压成一行标记。
+
+        主动搭话现在走真实会话（persist_memory=True），那段指令会作为 human
+        行留在历史里：一天最多六次、每次三千多字。两个代价——挤占上下文预算；
+        她下一轮会看到"主人说：你现在想主动发一条消息……"，误当成用户的话。
+
+        就地改 content 而不替换整行：对象身份不变，排除名单（按 id 记的）
+        照样有效，列表结构也不动。
+        """
+        try:
+            user_data = (getattr(self.plugin, "_user_sessions", {}) or {}).get(session_key)
+            if not isinstance(user_data, dict):
+                return
+            session = user_data.get("session")
+            history = getattr(session, "_conversation_history", None) or []
+            for index in range(len(history) - 1, max(0, int(hist_before)) - 1, -1):
+                row = history[index]
+                if getattr(row, "type", "") != "human":
+                    continue
+                content = row.content
+                text = content if isinstance(content, str) else str(content)
+                if not text.lstrip().startswith(self.INSTRUCTION_PREFIX):
+                    continue
+                row.content = self.INSTRUCTION_MARKER
+                self.plugin.logger.info(
+                    f"[主动搭话] 指令行已压缩成标记（原 {len(text)} 字）"
+                )
+                return
+        except Exception:
+            self.plugin.logger.warning(
+                "主动搭话指令行压缩失败（不影响发送）", exc_info=True
+            )
 
     async def send_private_message(self, *, target: str, message: str):
         try:
@@ -248,17 +312,29 @@ class QQProactiveMessageService:
                 is_group=False,
                 user_nickname=matched_nickname,
                 use_memory_context=permission_level == "admin",
-                persist_memory=False,
-                ephemeral_session=True,
+                # 主动开口也是一次真实的对话：她说了什么，她自己得记得。
+                # 旧写法固定 persist_memory=False + ephemeral_session=True，
+                # 于是这一轮既不留会话历史也不落记忆库（日志里那句
+                # "[临时发送] 已使用记忆上下文但跳过记忆同步"），下一轮
+                # 用户问"你刚才发的那个"，她当新话题反问。临时会话原本只是
+                # 为"她可以拒绝"那一支准备的（空回复=不发），不该把真说
+                # 出口的话也一起扔掉。
+                persist_memory=True,
+                ephemeral_session=False,
                 fallback_to_text_on_voice_failure=False,
                 permission_level_override=permission_level,
                 force_reply=True,
                 source_kind="proactive_private",
             )
+            session_key = self.plugin._build_session_key(
+                sender_id=resolved_qq, is_group=False, group_id=None,
+            )
+            hist_before = self._session_history_len(session_key)
             outcome = await self.plugin.reply_pipeline.run(request)
             if not outcome.reply_text:
                 return Err(SdkError(f"GENERATE_FAILED: {self.plugin.i18n.t('errors.proactive_private_generate_failed', default='AI 未生成可发送的私聊内容')}"))
             self.plugin.runtime_service.record_pipeline_outcome(source=request.source_kind, request=request, outcome=outcome)
+            self._compress_instruction_row(session_key, hist_before)
             return Ok({
                 "status": "sent",
                 "target": str(target or "").strip(),

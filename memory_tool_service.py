@@ -351,9 +351,10 @@ class QQMemoryToolService:
 
         if not result.text:
             # 本体在 query+time 双条件 0 命中时回"放宽条件重试"的提示，但
-            # 插件会话 max_tool_iterations=1：本轮的工具预算已经用完，封顶
-            # 后的 forced-finalize 会摘掉 tools——提示模型去做一件做不到的
-            # 事只会逼它输出"我再查查"之类的空头承诺。统一回"没有找到"。
+            # 召回每轮只放一次（闸在 handler 层，见 reply_generation_service
+            # 的 _build_recall_tool_handler），第二次调用直接返回空结果：
+            # 提示模型"再查一次"，它照做只会拿到空，然后输出"我再查查"这
+            # 种空头承诺。统一回"没有找到"，让她直接说不知道或者换个说法。
             return no_result, {}
 
         consumed: dict[str, bool] = {}

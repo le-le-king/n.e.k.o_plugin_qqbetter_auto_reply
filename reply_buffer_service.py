@@ -749,6 +749,15 @@ class QQReplyBufferService:
                 # 发送未确认（开放平台失败返回 None 不抛异常）：草稿仍属
                 # 未投递——排除记录保留、mention 不记，没送出去的回复不得
                 # 进 scoped 提取。命运已定（不重试），解除游标屏障。
+                if getattr(self.plugin, "logger", None):
+                    # 这条原先没有文件日志：空块计划会安静地走完整个缓冲
+                    # 流程，事后完全看不出「生成了却没发」。留痕后才能区分
+                    # 「模型没给正文」和「给了但连接失败」。
+                    self.plugin.logger.warning(
+                        f"[Buffer] 回复未送达，本条丢弃: session={session_key} "
+                        f"blocks={len(getattr(pending, 'first_blocks', None) or [])} "
+                        f"result={'None' if delivery is None else 'delivered=False'}"
+                    )
                 if self._detach_pending(session_key, pending, generation):
                     # 屏障与 pending 同进退：替补代际还在缓冲时草稿命运未
                     # 定，解除屏障会让游标越过一条随后可能被投递的行。

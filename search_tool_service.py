@@ -262,7 +262,8 @@ class QQSearchToolService:
             and not any(t == 0 for t, _ in ranked)
         ):
             # 要的是视频、但国内平台一条都没出来：补一次带 bilibili 的检索。
-            # 模型那边 max_tool_iterations=1，它自己没法补搜，只能这里补。
+            # 检索每轮只放一次（闸在 handler 层，第二次调用复用上次结果），
+            # 模型自己补不了，只能这里补。
             #
             # 只对中文查询补：实测英文 query（"cat sneezing compilation 视频"）
             # 补搜回来仍然是 youtube/tiktok/facebook 一整套，国内平台根本没有

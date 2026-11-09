@@ -150,6 +150,23 @@ class QQAutoReplyConfigStore:
             "private_participant_memory_enabled": False,
             # 跨群实时话题不是长期记忆的一部分，默认严格隔离。
             "allow_cross_group_context": False,
+            # 群聊时把主人私聊的最近对话带进上下文——**仅当发言人就是主人
+            # 本人**（permission_level=="admin"），别人说话一律不注入。
+            # 默认关闭：打开后主人在群里随口一句，她答的话里可能带出私聊
+            # 里说过的私事，全群可见。这是显式 opt-in，不是默认行为。
+            "cross_domain_owner_memory": False,
+            # 带多少条私聊消息（双向合计，含她自己的回复）。窗口越长越
+            # 占 token，8 条约等于最近 4 轮。
+            "cross_domain_owner_context_rounds": 8,
+            # 再把私聊的**长期记忆**（legacy 语料里攒下的事实/反思/人物画像）
+            # 也带进群聊。与上面那条是两件事：那条是"最近说过什么"，这条是
+            # "她长期记得主人什么"。同样只在主人本人发言的群轮注入。
+            # 默认关闭，且独立于上面那条——只想带最近对话、不想带旧事的
+            # 用户可以只开一个。
+            "cross_domain_owner_longterm_memory": False,
+            # 长期记忆段的字符上限：legacy bootstrap 可能很长，整段塞进群
+            # prompt 既贵又容易喧宾夺主。按行截断，不切半句。
+            "cross_domain_owner_longterm_max_chars": 1200,
             # === 私聊主动搭话 ===
             # 用户长时间不说话时，由猫娘自己起个话头。跟群聊的冷场破冰是两套：
             # 私聊不进注意力系统，没有焦点、没有冷场切换，只能靠"多久没互动"来判。
@@ -164,6 +181,15 @@ class QQAutoReplyConfigStore:
             "proactive_private_unanswered_backoff_hours": 4,  # 主动后没回音，每次多等几小时
             "proactive_private_max_fatigue": 70,       # 疲劳超过这个值就不打扰
             "proactive_private_check_interval_seconds": 60,  # 后台判定周期
+            # === 定时搭话 ===
+            # 主人提前定好「几点、说什么」（如早上说早安、晚上说晚安），到点由
+            # 模型自由发挥生成一句私聊发出去。默认关闭：这是显式排好的打扰，
+            # 该不该有、什么时候有，必须主人自己说了算。
+            "scheduled_greeting_enabled": False,
+            # 条目形态 [{"time": "08:00", "instruction": "跟他说早安"}]，可选
+            # "target" 指定收件 QQ（默认发给 admin）。保存时清洗校验。
+            "scheduled_greetings": [],
+            "scheduled_greeting_check_interval_seconds": 30,  # 到点检查周期
             # === 断线补消息 ===
             # OneBot 的 WS 是纯推送、没有重放：插件和 LLBot 之间一断，那段时间的
             # 事件直接消失；LLBot 和 QQ 之间断了，QQ 会补推离线消息但 LLBot 的
@@ -191,6 +217,11 @@ class QQAutoReplyConfigStore:
             # 手动填 cookie 的兜底通道。正常情况用扫码登录，凭据存
             # data/bilibili_credential.json，不会落到这里。
             "bilibili_credential": {},
+            # === 本地图库 ===
+            # 图库会一直长大（上限 1200 张），而插件数据目录常在系统盘上。
+            # 空 = 用默认的 <data>/gallery；填绝对路径就存到那里。
+            # 只认绝对路径：相对路径猜错一次，图就散在谁也找不到的地方。
+            "gallery_dir": "",
             # 提示词编辑器覆盖值（locale → layer_id → text）
             "prompt_overrides": {},
             # 按群自定义提示词（group_id → 提示词文本）

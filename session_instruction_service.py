@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -510,6 +511,21 @@ class QQSessionInstructionService:
         cross_group_section = self._append_cross_group_section(
             sections, group_id, is_group,
         )
+        owner_private_section = self._append_owner_private_section(
+            sections,
+            permission_level=permission_level,
+            sender_id=sender_id,
+            is_group=is_group,
+        )
+        # 长期记忆是另一段、另一个开关：上面那段是活会话内存里的最近几句，
+        # 这段是记忆库 legacy 语料里长期攒下的事。两段各自成段、各自可撤。
+        owner_longterm_section = await self._append_owner_longterm_section(
+            sections,
+            her_name=her_name,
+            permission_level=permission_level,
+            sender_id=sender_id,
+            is_group=is_group,
+        )
         self._append_attention_context_section(sections, group_id, is_group)
         self._append_emotion_section(sections, group_id, is_group)
         sections.append(self._resolve_static_layer("detail_constraints_section", DETAIL_CONSTRAINTS_SECTION, user_language))
@@ -532,6 +548,8 @@ class QQSessionInstructionService:
             scene_mode=scene_mode,
             cross_group_section=cross_group_section,
             cross_session_section=cross_session_section,
+            owner_private_section=owner_private_section,
+            owner_longterm_section=owner_longterm_section,
             used_member_subject=used_member_subject and bool(core_memory_text),
         )
 
@@ -980,6 +998,241 @@ class QQSessionInstructionService:
         )
         sections.append(section)
         return section
+
+    def _append_owner_private_section(
+        self, sections: list[str], *,
+        permission_level: str = "",
+        sender_id: str = "",
+        is_group: bool = False,
+    ) -> str:
+        """群聊时把主人私聊的最近对话带进来（仅主人本人发言时）。
+
+        跨域披露的边界只有一条：**发言人必须就是主人**。群里其他人说话时
+        这条路径整个不执行——否则任何群友都能从她的回答里套出主人的私事。
+
+        读的是活会话内存（``_user_sessions['private:<QQ>']`` 里那份
+        ``_conversation_history``），不是记忆库：私聊走 legacy 主人语料、
+        群聊走 scoped 分域档案，两套库互不检索是既定设计（见 memory_bridge
+        的 participant_subject docstring）。所以这里只补"最近说过什么"，
+        不改库结构、不产生新的写入路径，关掉开关就等于没发生过。
+
+        Returns the injected section text (empty when nothing was added) so
+        the caller can strip it if the opt-in is revoked while later
+        context-building awaits are still running.
+        """
+        if not is_group or not str(sender_id or "").strip():
+            return ""
+        if str(permission_level or "") != "admin":
+            # 群友/陌生人一律不注入：这是整条路径唯一的授权判据。
+            return ""
+        settings = getattr(self.plugin, "_qq_settings", {}) or {}
+        if not bool(settings.get("cross_domain_owner_memory", False)):
+            return ""
+        private_key = f"private:{str(sender_id).strip()}"
+        entry = (getattr(self.plugin, "_user_sessions", {}) or {}).get(private_key)
+        if not isinstance(entry, dict):
+            return ""
+        session = entry.get("session")
+        if not session or not hasattr(session, "_conversation_history"):
+            return ""
+        raw_rounds = settings.get("cross_domain_owner_context_rounds")
+        try:
+            # 不能用 `or 8`：0 是合法输入（用户想压到最短），会被 falsy
+            # 悄悄换成默认值 8，配 0 等于没配。
+            rounds = 8 if raw_rounds is None else int(raw_rounds)
+        except (TypeError, ValueError):
+            rounds = 8
+        rounds = min(40, max(2, rounds))
+        history = getattr(session, "_conversation_history", []) or []
+        lines: list[str] = []
+        for msg in history[-rounds:]:
+            role = getattr(msg, "role", "") if hasattr(msg, "role") else (
+                msg.get("role", "") if isinstance(msg, dict) else ""
+            )
+            raw = getattr(msg, "content", "") if hasattr(msg, "content") else (
+                msg.get("content", "") if isinstance(msg, dict) else ""
+            )
+            text = self._history_content_text(raw)
+            if not text:
+                continue
+            if role == "user":
+                lines.append(f"主人：{text[:120]}")
+            elif role == "assistant":
+                lines.append(f"你：{text[:120]}")
+        if not lines:
+            return ""
+        header = self.plugin.i18n.t(
+            "prompts.owner_private_context",
+            default=(
+                "## 你和主人的私聊（Owner Private Chat）\n"
+                "以下是主人和你在 QQ 私聊里最近说过的话，只有你能看到。\n"
+                "**它们只能用来理解主人此刻指的是什么，绝对不要在群里复述原文、"
+                "引用细节，也不要把私聊里的事主动讲给群里其他人。**\n"
+                "如果主人问的是私聊里提过的事，用「你之前跟我说过」这种含糊说法"
+                "接住就行，不要说出具体内容。\n"
+            ),
+        )
+        section = header + "\n".join(lines)
+        sections.append(section)
+        return section
+
+    @staticmethod
+    def _history_content_text(raw: Any) -> str:
+        """把一条历史消息的 content 压成纯文本片段。
+
+        多模态轮里 content 是 ``list[dict]``（text/image_url 混合），
+        直接 str() 会把她自己看过的图片 base64/repr 塞进群 prompt。
+        """
+        if isinstance(raw, str):
+            return raw.strip()
+        if isinstance(raw, list):
+            parts: list[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+            return "".join(parts).strip()
+        return str(raw).strip() if raw else ""
+
+    #: 主人 legacy 长期记忆的缓存有效期（秒）。群回复每轮都可能走这条路，
+    #: 不缓存等于每说一句话都去记忆服务器读一遍全文。
+    _OWNER_LONGTERM_CACHE_SECONDS = 300.0
+    #: 读失败后的短缓存：记忆服务器没起/超时时，别让每一轮群消息都白等
+    #: 一次 5 秒。
+    _OWNER_LONGTERM_FAIL_CACHE_SECONDS = 60.0
+
+    async def _append_owner_longterm_section(
+        self, sections: list[str], *,
+        her_name: str,
+        permission_level: str = "",
+        sender_id: str = "",
+        is_group: bool = False,
+    ) -> str:
+        """群聊时把主人私聊的**长期记忆**带进来（仅主人本人发言时）。
+
+        和 ``_append_owner_private_section`` 是两件事、两个开关：那段读的是
+        活会话内存里的「最近说过的几句」，这段读的是记忆库 legacy 语料里
+        「她长期记得主人的事」。前者回答「刚才说到哪」，后者回答「她记不
+        记得我」。
+
+        授权判据与那段完全一致且只有一条：**发言人必须是插件名册里的
+        admin（主人本人）**。群友、群管理员、陌生人一律不注入——注意这里
+        判的是插件自己的权限名册，不是 QQ 群里的群主/管理员身份。群里的
+        群管理员若不在名册里，查出来是 none，这条路径根本不执行。
+
+        Returns the injected section text (empty when nothing was added).
+        """
+        if not is_group or not str(sender_id or "").strip():
+            return ""
+        if str(permission_level or "") != "admin":
+            return ""
+        settings = getattr(self.plugin, "_qq_settings", {}) or {}
+        if not bool(settings.get("cross_domain_owner_longterm_memory", False)):
+            return ""
+        memory_text = await self._fetch_owner_legacy_memory(her_name)
+        if not memory_text:
+            return ""
+        raw_max = settings.get("cross_domain_owner_longterm_max_chars")
+        try:
+            # 与 rounds 同一条教训：不能用 `or 1200`，0 是合法输入。
+            max_chars = 1200 if raw_max is None else int(raw_max)
+        except (TypeError, ValueError):
+            max_chars = 1200
+        max_chars = min(4000, max(200, max_chars))
+        trimmed = self._truncate_memory_text(memory_text, max_chars)
+        if not trimmed:
+            return ""
+        header = self.plugin.i18n.t(
+            "prompts.owner_longterm_context",
+            default=(
+                "## 你记得的关于主人的事（Owner Long-Term Memory）\n"
+                "以下是你在私聊里长期记住的关于主人的事，只有你能看到。\n"
+                "**在群里用到它们要格外克制：不要主动展开、不要说具体细节、"
+                "不要把主人的私事讲给群里其他人。**\n"
+                "主人问起的时候，用「你之前跟我说过」这种含糊说法接住，"
+                "让他知道你没忘就够了。\n"
+            ),
+        )
+        section = header + trimmed
+        sections.append(section)
+        return section
+
+    async def _fetch_owner_legacy_memory(self, her_name: str) -> str:
+        """取主人私聊的 legacy 长期记忆全文，带进程内缓存。
+
+        取的是 ``/new_dialog/{her_name}`` 那份服务端渲染的语料——私聊主线
+        本来就读它，这里只是换个调用点，不新建记忆库、不产生写入路径，
+        关掉开关就等于没发生过。
+
+        失败与「本来就没有记忆」必须分得开：两者在群里表现一样（想不起
+        旧事），只有计数能告诉我们是服务器挂了还是这人真没存过东西。
+        """
+        key = str(her_name or "").strip()
+        if not key:
+            return ""
+        cache = getattr(self, "_owner_legacy_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._owner_legacy_cache = cache
+        now = time.monotonic()
+        hit = cache.get(key)
+        if isinstance(hit, tuple) and len(hit) == 2:
+            cached_at, cached_text = hit
+            ttl = (
+                self._OWNER_LONGTERM_CACHE_SECONDS
+                if cached_text
+                else self._OWNER_LONGTERM_FAIL_CACHE_SECONDS
+            )
+            if now - cached_at < ttl:
+                return cached_text
+            previous = cached_text
+        else:
+            previous = ""
+        bridge = getattr(self.plugin, "memory_bridge", None)
+        if bridge is None:
+            return ""
+        diag = getattr(self, "_owner_legacy_diag", None)
+        if not isinstance(diag, dict):
+            diag = {"ok": 0, "empty": 0, "error": 0}
+            self._owner_legacy_diag = diag
+        try:
+            text = await bridge.fetch_bootstrap_memory(key)
+        except Exception as error:
+            diag["error"] += 1
+            logger = getattr(self.plugin, "logger", None)
+            if logger is not None:
+                # 连续失败比偶发失败更值得看：第 3 次起升到 warning。
+                log = logger.warning if diag["error"] % 3 == 0 else logger.debug
+                log(f"读取主人私聊长期记忆失败（累计 {diag['error']} 次）: {error}")
+            # 缓存旧值（可能是上一轮成功的结果），别因为一次抖动就整段消失。
+            cache[key] = (now, previous)
+            return previous
+        normalized = str(text or "").strip()
+        if normalized:
+            diag["ok"] += 1
+        else:
+            diag["empty"] += 1
+        cache[key] = (now, normalized)
+        return normalized
+
+    @staticmethod
+    def _truncate_memory_text(text: str, max_chars: int) -> str:
+        """按行截断长期记忆，不在句子中间砍一刀。"""
+        raw = str(text or "")
+        if len(raw) <= max_chars:
+            return raw
+        kept: list[str] = []
+        used = 0
+        for line in raw.splitlines():
+            if used + len(line) + 1 > max_chars:
+                break
+            kept.append(line)
+            used += len(line) + 1
+        if kept:
+            return "\n".join(kept)
+        # 整段就一行（模型/NPC 偶发）：只能硬切。
+        return raw[:max_chars]
 
     def _append_blacklist_section(self, sections: list[str]) -> None:
         """追加黑名单词汇，告诉 LLM 不要在回复中使用"""

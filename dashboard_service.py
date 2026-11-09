@@ -21,6 +21,21 @@ class QQDashboardService:
             "message": message,
         }
 
+    def _resolve_gallery_dir(self, settings: dict[str, Any]) -> str:
+        """图库实际落盘的目录。
+
+        优先问服务本身，而不是在这里再抄一遍 ``gallery_dir or data/gallery``
+        的规则——两处规则迟早会走偏，那时 UI 显示的路径和真正存图的路径
+        不是同一个，用户按界面上那个路径打开只会看到空文件夹。
+        """
+        svc = getattr(self.plugin, "gallery_service", None)
+        if svc is not None:
+            try:
+                return str(svc.root_dir())
+            except Exception:
+                self.plugin.logger.exception("解析图库目录失败，回退默认值")
+        return str(self.plugin.data_path() / "gallery")
+
     def _inject_business_permissions(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload["business_config"]["trusted_users"] = list(payload.get("permissions", {}).get("trusted_users", []))
         payload["business_config"]["trusted_groups"] = list(payload.get("permissions", {}).get("trusted_groups", []))
@@ -75,6 +90,13 @@ class QQDashboardService:
                 "group_member_memory_enabled": bool(settings.get("group_member_memory_enabled", False)),
                 "private_participant_memory_enabled": bool(settings.get("private_participant_memory_enabled", False)),
                 "allow_cross_group_context": bool(settings.get("allow_cross_group_context", False)),
+                "cross_domain_owner_memory": bool(settings.get("cross_domain_owner_memory", False)),
+                "cross_domain_owner_context_rounds": int(
+                    settings.get("cross_domain_owner_context_rounds")
+                    if settings.get("cross_domain_owner_context_rounds") is not None
+                    else 8
+                ),
+                "cross_domain_owner_longterm_memory": bool(settings.get("cross_domain_owner_longterm_memory", False)),
                 "group_attention_max_score": float(settings.get("group_attention_max_score") if settings.get("group_attention_max_score") is not None else 10.0),
                 "group_attention_focus_threshold": float(settings.get("group_attention_focus_threshold") if settings.get("group_attention_focus_threshold") is not None else 4.0),
                 "group_attention_focus_send_threshold": float(settings.get("group_attention_focus_send_threshold") if settings.get("group_attention_focus_send_threshold") is not None else 2.0),
@@ -88,10 +110,29 @@ class QQDashboardService:
                 "attention_fall_rate": float(settings.get("attention_fall_rate") if settings.get("attention_fall_rate") is not None else 0.015),
                 "attention_consume_ratio": float(settings.get("attention_consume_ratio") if settings.get("attention_consume_ratio") is not None else 0.10),
                 "icebreaker_cold_threshold": int(settings.get("icebreaker_cold_threshold") if settings.get("icebreaker_cold_threshold") is not None else 3),
+                # 图库目录：空串 = 用 <data>/gallery。同时给出解析后的实际
+                # 路径，免得用户在引导里看到一个空框、以为没生效。
+                "gallery_dir": str(settings.get("gallery_dir") or ""),
+                "gallery_dir_effective": self._resolve_gallery_dir(settings),
+                # 私聊主动搭话
+                "proactive_private_enabled": bool(settings.get("proactive_private_enabled", True)),
+                "proactive_private_min_idle_minutes": float(settings.get("proactive_private_min_idle_minutes") if settings.get("proactive_private_min_idle_minutes") is not None else 30),
+                "proactive_private_min_gap_minutes": float(settings.get("proactive_private_min_gap_minutes") if settings.get("proactive_private_min_gap_minutes") is not None else 45),
+                "proactive_private_daily_limit": int(settings.get("proactive_private_daily_limit") if settings.get("proactive_private_daily_limit") is not None else 6),
+                "proactive_private_check_interval_seconds": int(settings.get("proactive_private_check_interval_seconds") if settings.get("proactive_private_check_interval_seconds") is not None else 60),
+                # 定时搭话
+                "scheduled_greeting_enabled": bool(settings.get("scheduled_greeting_enabled", False)),
+                "scheduled_greetings": list(settings.get("scheduled_greetings") or []) if isinstance(settings.get("scheduled_greetings"), list) else [],
+                "scheduled_greeting_check_interval_seconds": int(settings.get("scheduled_greeting_check_interval_seconds") if settings.get("scheduled_greeting_check_interval_seconds") is not None else 30),
+                # B 站刷视频
+                "bilibili_browse_enabled": bool(settings.get("bilibili_browse_enabled", False)),
+                "bilibili_browse_interval_minutes": int(settings.get("bilibili_browse_interval_minutes") if settings.get("bilibili_browse_interval_minutes") is not None else 60),
             },
             "guide": {
                 "step_napcat_done": bool(settings.get("guide_step_napcat_done", False)) or bool(runtime["napcat_managed"] and runtime["napcat_running"]),
-                "step_service_done": bool(settings.get("onebot_url")) and bool(settings.get("token")),
+                # 跟前端同一口径：以实际连上为准。按 `url and token` 判的话，
+                # LLBot 这种 token 留空的配置会一直显示"未配置"，而它其实是通的。
+                "step_service_done": bool(runtime.get("onebot_connected")) or (bool(settings.get("onebot_url")) and bool(settings.get("token"))),
                 "step_contacts_done": bool(self.plugin.permission_mgr and self.plugin.permission_mgr.list_users()),
                 "step_auto_reply_done": bool(settings.get("guide_step_runtime_done", False)) and self.plugin._running,
             },
@@ -208,12 +249,26 @@ class QQDashboardService:
         group_member_memory_enabled: Optional[bool] = None,
         private_participant_memory_enabled: Optional[bool] = None,
         allow_cross_group_context: Optional[bool] = None,
+        cross_domain_owner_memory: Optional[bool] = None,
+        cross_domain_owner_context_rounds: Optional[int] = None,
+        cross_domain_owner_longterm_memory: Optional[bool] = None,
         strategy_mode: Optional[str] = None,
         qq_connection_mode: Optional[str] = None,
         qq_open_app_id: Optional[str] = None,
         qq_open_client_secret: Optional[str] = None,
         qq_open_identity_probe_enabled: Optional[bool] = None,
         local_stt_url: Optional[str] = None,
+        gallery_dir: Optional[str] = None,
+        proactive_private_enabled: Optional[bool] = None,
+        proactive_private_min_idle_minutes: Optional[float] = None,
+        proactive_private_min_gap_minutes: Optional[float] = None,
+        proactive_private_daily_limit: Optional[float] = None,
+        proactive_private_check_interval_seconds: Optional[float] = None,
+        scheduled_greeting_enabled: Optional[bool] = None,
+        scheduled_greetings: Optional[list[dict[str, Any]]] = None,
+        scheduled_greeting_check_interval_seconds: Optional[float] = None,
+        bilibili_browse_enabled: Optional[bool] = None,
+        bilibili_browse_interval_minutes: Optional[int] = None,
     ):
         try:
             result = await self.plugin.settings_service.save_settings(
@@ -248,20 +303,40 @@ class QQDashboardService:
                 group_member_memory_enabled=group_member_memory_enabled,
                 private_participant_memory_enabled=private_participant_memory_enabled,
                 allow_cross_group_context=allow_cross_group_context,
+                cross_domain_owner_memory=cross_domain_owner_memory,
+                cross_domain_owner_context_rounds=cross_domain_owner_context_rounds,
+                cross_domain_owner_longterm_memory=cross_domain_owner_longterm_memory,
                 strategy_mode=strategy_mode,
                 qq_connection_mode=qq_connection_mode,
                 qq_open_app_id=qq_open_app_id,
                 qq_open_client_secret=qq_open_client_secret,
                 qq_open_identity_probe_enabled=qq_open_identity_probe_enabled,
                 local_stt_url=local_stt_url,
+                gallery_dir=gallery_dir,
+                proactive_private_enabled=proactive_private_enabled,
+                proactive_private_min_idle_minutes=proactive_private_min_idle_minutes,
+                proactive_private_min_gap_minutes=proactive_private_min_gap_minutes,
+                proactive_private_daily_limit=proactive_private_daily_limit,
+                proactive_private_check_interval_seconds=proactive_private_check_interval_seconds,
+                scheduled_greeting_enabled=scheduled_greeting_enabled,
+                scheduled_greetings=scheduled_greetings,
+                scheduled_greeting_check_interval_seconds=scheduled_greeting_check_interval_seconds,
+                bilibili_browse_enabled=bilibili_browse_enabled,
+                bilibili_browse_interval_minutes=bilibili_browse_interval_minutes,
             )
         except ValueError as exc:
             message = str(exc)
-            if "truth_reply_probability" in message:
-                field = "truth_reply_probability"
-            else:
-                field = "normal_relay_probability"
-            return Err(SdkError(f"INVALID_ARGUMENT: {self.plugin.i18n.t('errors.invalid_probability', default=field + ' 必须在 0 到 1 之间')}"))
+            # 除了两个概率字段，其余字段的校验错误已经把字段名和正确的
+            # 取值范围写在 message 里了。原来这里一律报成「概率必须在 0
+            # 到 1 之间」，填错主动搭话间隔也会收到这句话，等于误导。
+            if "normal_relay_probability" in message or "truth_reply_probability" in message:
+                field = (
+                    "truth_reply_probability"
+                    if "truth_reply_probability" in message
+                    else "normal_relay_probability"
+                )
+                return Err(SdkError(f"INVALID_ARGUMENT: {self.plugin.i18n.t('errors.invalid_probability', default=field + ' 必须在 0 到 1 之间')}"))
+            return Err(SdkError(f"INVALID_ARGUMENT: {message}"))
         payload = await self.build_dashboard_state()
         payload.update(result)
         return Ok(self._inject_business_permissions(payload))

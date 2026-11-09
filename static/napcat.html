@@ -125,6 +125,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div class="page" id="page-guide">
 <div class="card"><div class="card-title" data-i18n="ui.shared.card.guide">配置引导</div>
     <div id="guide-progress" style="height:4px;background:#eee;border-radius:2px;margin-bottom:16px"><div id="guide-progress-bar" style="height:4px;background:var(--accent);border-radius:2px;width:0;transition:.3s"></div></div>
+    <div id="guide-conn-hint" style="display:none;margin-bottom:16px"></div>
     <div id="guide-list" style="font-size:13px"></div>
     <div style="display:none">
       <div id="guide-detail-step-napcat">
@@ -239,6 +240,113 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     </div>
   </div>
 </div>
+<div id="guide-detail-step-bilibili">
+  <div style="font-size:14px;line-height:2;">
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(99,102,241,.1);border-left:4px solid var(--accent);border-radius:6px;color:#3730a3;font-size:13px;">
+      <b>为什么要登录：</b>不登录也能刷到视频标题和弹幕，但<b>字幕抓不到</b>——B 站的字幕接口要登录态，而且过期时是静默的（回空列表、不报错）。没有字幕她只能看标题瞎猜，容易把视频内容说错。
+    </div>
+    <div id="bili-guide-status" style="margin-bottom:12px;font-size:13px;color:#666;">正在读取状态…</div>
+    <div id="bili-guide-qrbox" style="display:none;text-align:center;margin-bottom:12px;">
+      <img id="bili-guide-qr" style="max-width:200px;border-radius:8px;border:1px solid var(--border);" alt="B站登录二维码">
+      <div style="font-size:12px;color:#999;margin-top:6px;">用 B 站 App 扫码，扫完点「我扫好了」</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button class="btn btn-primary btn-sm" onclick="biliGuideStart()">生成登录二维码</button>
+      <button class="btn btn-ghost btn-sm" onclick="biliGuideCheck()">我扫好了</button>
+      <button class="btn btn-ghost btn-sm" onclick="biliGuideRefresh(false)">刷新状态</button>
+      <button class="btn btn-danger btn-sm" onclick="biliGuideLogout()">退出登录</button>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px;">
+      <label class="form-check" style="margin-bottom:10px;"><input type="checkbox" id="bili-guide-enabled"> <span>开启定时刷视频</span></label>
+      <div class="form-group">
+        <label class="form-label">多久刷一轮（分钟）</label>
+        <input class="form-input" id="bili-guide-interval" type="number" min="5" max="1440" step="5" placeholder="60">
+        <div class="form-hint">下限 5 分钟。填太短不是「刷着玩」，是拿账号去撞风控。</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="biliGuideSave()">保存刷视频设置</button>
+    </div>
+  </div>
+</div>
+<div id="guide-detail-step-gallery">
+  <div style="font-size:14px;line-height:2;">
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,.1);border-left:4px solid var(--success);border-radius:6px;color:#166534;font-size:13px;">
+      她会把见过的图连同描述一起收进<b>本地图库</b>。攒起来之后能拿来当头像、挑一张回你 —— 不用每次重新下载、重新认图。
+    </div>
+    <div style="margin-bottom:12px;font-size:13px;line-height:1.9;">
+      当前目录：<code id="gal-guide-path">…</code><br>
+      已存 <b id="gal-guide-count">-</b> 张
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <input class="form-input" id="gal-guide-input" placeholder="例如 D:\看图库" style="flex:1;min-width:150px;">
+      <button class="btn btn-ghost btn-sm" onclick="galleryGuidePick()">选目录</button>
+      <button class="btn btn-primary btn-sm" onclick="galleryGuideSave()">保存</button>
+      <button class="btn btn-ghost btn-sm" onclick="galleryGuideReset()">恢复默认</button>
+    </div>
+    <div style="font-size:12px;color:#999;line-height:1.8;">填空 = 用默认目录（插件数据目录下的 gallery）。<b>只认绝对路径</b>：相对路径猜错一次，图就散在谁也找不到的地方。换目录<b>不会自动搬旧图</b>，原来的还在原处。</div>
+    <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;font-size:13px;line-height:1.9;">
+      <b>怎么往里加图：</b>往 <code id="gal-guide-inbox">…/inbox</code> 里丢图片文件，再点下面这个按钮。用资源管理器拖比走上传接口顺手。
+      <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="galleryGuideImport()">导入投喂目录</button></div>
+    </div>
+  </div>
+</div>
+<div id="guide-detail-step-proactive">
+  <div style="font-size:14px;line-height:2;">
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(245,158,11,.12);border-left:4px solid var(--warning);border-radius:6px;color:#92400e;font-size:13px;">
+      你长时间不说话时，她会自己起个话头找你。这里管的是<b>私聊</b>；群聊那边是另一套（冷场破冰），在「配置 → 参数」里。
+    </div>
+    <label class="form-check" style="margin-bottom:12px;"><input type="checkbox" id="pro-guide-enabled"> <span>允许私聊主动搭话</span></label>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">多久没聊天才开口（分钟）</label><input class="form-input" id="pro-guide-idle" type="number" min="1" max="10080" step="5" placeholder="30"></div>
+      <div class="form-group"><label class="form-label">两次主动至少隔多久（分钟）</label><input class="form-input" id="pro-guide-gap" type="number" min="0" max="10080" step="5" placeholder="45"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">每天最多主动几次</label><input class="form-input" id="pro-guide-daily" type="number" min="0" max="500" step="1" placeholder="6"></div>
+      <div class="form-group"><label class="form-label">后台检查周期（秒）</label><input class="form-input" id="pro-guide-check" type="number" min="20" max="3600" step="10" placeholder="60"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="proactiveGuideSave()">保存</button>
+    <div style="font-size:12px;color:#999;margin-top:10px;line-height:1.8;">
+      「多久没聊天才开口」和「两次至少隔多久」撞在一起时，取大的那个。设太小会显得黏人；「每天最多几次」填 0 等于只在手动触发时才发。
+    </div>
+  </div>
+</div>
+<div id="guide-detail-step-sched">
+  <div style="font-size:14px;line-height:2;">
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(59,130,246,.1);border-left:4px solid var(--accent);border-radius:6px;color:#1e40af;font-size:13px;">
+      定时搭话：你提前定好「几点、让她做什么」（比如早上说早安、晚上说晚安），到点她自己想一句发你私聊。和上面的主动搭话是两回事——这个时间固定，主题也听你的。
+    </div>
+    <label class="form-check" style="margin-bottom:12px;"><input type="checkbox" id="sched-guide-enabled"> <span>启用定时搭话</span></label>
+    <div id="sched-guide-rows"></div>
+    <button class="btn btn-ghost btn-sm" onclick="schedGuideAddRow()">+ 添加一条</button>
+    <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="schedGuideSave()">保存</button></div>
+    <div style="font-size:12px;color:#999;margin-top:10px;line-height:1.8;">
+      到点后她会照你写的话自己组织语言，不是机械复读——写「说早安」她就像平时那样跟你道个早。每条每天只发一次；插件当时没连上 QQ 会顺延几分钟内重试，超过宽限就跳过（早上的早安中午补发就吓人了）。留空或时间不合法的条目保存时会被丢掉。
+    </div>
+  </div>
+</div>
+<div id="guide-detail-step-crossdomain">
+  <div style="font-size:14px;line-height:2;">
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(168,85,247,.1);border-left:4px solid #a855f7;border-radius:6px;color:#6b21a8;font-size:13px;">
+      私聊和群聊本来是两本账：私聊里说过的话、她记住的你的事，在群里她一概想不起来。这里可以把两本账<b>单向打通</b>——让你在群里说话时，她能带一点私聊那边的记忆。反方向不打通：私聊里不会出现群聊的事。
+    </div>
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid var(--danger);border-radius:6px;color:#991b1b;font-size:13px;">
+      <b>只有你自己说话时才生效。</b>判据是插件「权限管理」里登记为 admin 的那个 QQ（就是第一次私聊认主时的那个），<b>跟 QQ 群里的群主/群管理员身份无关</b>——群里的管理员若不在名册里，照样什么都看不到。别人在群里问「你主人在忙什么」，她不会答。
+    </div>
+    <label class="form-check" style="margin-bottom:8px;"><input type="checkbox" id="xg-owner-recent"> <span>群里带上私聊的<b>最近对话</b>（刚才说到哪）</span></label>
+    <div class="form-group" style="margin:0 0 16px 26px;">
+      <label class="form-label">带多少条（双向合计，含她自己的回复）</label>
+      <input class="form-input" id="xg-owner-rounds" type="number" min="2" max="40" step="1" placeholder="8">
+      <div class="form-hint">下限 2（至少凑出「你一句 + 她一句」），上限 40。8 条约等于最近 4 轮。</div>
+    </div>
+    <label class="form-check" style="margin-bottom:8px;"><input type="checkbox" id="xg-owner-longterm"> <span>群里带上私聊的<b>长期记忆</b>（她长期记得你什么）</span></label>
+    <div class="form-group" style="margin:0 0 16px 26px;">
+      <div class="form-hint">这些是她在私聊里攒下的事实、印象、你的近况。和上面那道是两件事：那条是「刚才说到哪」，这条是「她记不记得我」。两个开关互不影响，可以只开一个。</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="crossDomainGuideSave()">保存</button>
+    <div style="font-size:12px;color:#999;margin-top:10px;line-height:1.8;">
+      两段注入都会在提示词里硬写「不要主动展开、不要说细节、不要把私事讲给群里其他人」——她接得住「你之前跟我说过」，但不会把原文摊开。长期记忆每次读回来会缓存 5 分钟，不会每句话都去翻一遍记忆库。关掉就等于没发生过，不会删除已经记住的东西。
+    </div>
+  </div>
+</div>
 <div id="guide-detail-step-sticker">
   <div style="font-size:14px;line-height:2;">
     <div style="margin-bottom:16px"><b>1. 上传表情包：</b>切换到「表情包」页，拖入图片或点击选择文件，填写描述后点上传。支持拖入整个文件夹批量导入。</div>
@@ -306,6 +414,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div class="form-group"><label class="form-check"><input type="checkbox" id="cfg-group-member-memory"> <span data-i18n="ui.memory.member_enabled">记录群成员长期记忆</span><span style="font-size:11px;color:#999" data-i18n="ui.memory.member_depends">（依赖群记忆开关）</span></label></div>
         <div class="form-group"><label class="form-check"><input type="checkbox" id="cfg-private-participant-memory"> <span data-i18n="ui.shared.config.private_participant_memory">记录私聊好友长期记忆（非管理员私聊；以对方为主体单独建档）</span></label></div>
         <div class="form-group"><label class="form-check"><input type="checkbox" id="cfg-cross-group-context"> <span data-i18n="ui.memory.cross_group">允许跨群实时话题上下文</span></label></div>
+        <div class="form-group"><label class="form-check"><input type="checkbox" id="cfg-owner-private-memory"> <span data-i18n="ui.memory.owner_private">群聊时可引用主人私聊的最近对话</span><span style="font-size:11px;color:#999" data-i18n="ui.memory.owner_private_depends">（只有主人本人在群里说话时才生效）</span></label></div>
+        <div class="form-group"><label class="form-label" data-i18n="ui.memory.owner_private_rounds">带入的私聊消息条数</label><input class="form-input" id="cfg-owner-private-rounds" type="number" min="2" max="40" step="1"></div>
+        <div class="form-group"><label class="form-check"><input type="checkbox" id="cfg-owner-longterm-memory"> <span data-i18n="ui.memory.owner_longterm">群聊时可引用主人私聊的长期记忆</span><span style="font-size:11px;color:#999" data-i18n="ui.memory.owner_longterm_depends">（她长期记住的你，不是最近聊的几句）</span></label></div>
     </div>
     <div class="card" id="scene-prob-card" style="display:none"><div class="card-title" data-i18n="ui.shared.card.scene_prob">概率参数（neko_scene）</div>
         <div class="form-row"><div class="form-group"><label class="form-label" data-i18n="ui.shared.label.normal_relay_prob">普通转发概率</label><input class="form-input" id="cfg-normal-prob" type="number" min="0" max="1" step="0.01"></div><div class="form-group"><label class="form-label" data-i18n="ui.shared.label.open_reply_prob">开放群回复概率</label><input class="form-input" id="cfg-truth-prob" type="number" min="0" max="1" step="0.01"></div></div>
@@ -444,27 +555,91 @@ let currentPage='status',currentSub='overview';
 function switchPage(page){currentPage=page;document.getElementById('content').scrollTop=0;document.querySelectorAll('#sidebar .nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));document.querySelectorAll('.page').forEach(e=>e.classList.remove('active'));let tb=document.getElementById('topbar-tabs'),tabs=[];if(page==='guide'){tb.innerHTML='';switchSub('')}else if(page==='status')tabs=[{id:'overview',label:t('ui.shared.topbar.tab_overview','概览')},{id:'traces',label:t('ui.shared.topbar.tab_logs','流水')}];else if(page==='config')tabs=[{id:'connection',label:t('ui.shared.topbar.tab_connection','连接')},{id:'strategy',label:t('ui.shared.topbar.tab_strategy','策略')},{id:'params',label:t('ui.shared.topbar.tab_params','参数')},{id:'keywords',label:t('ui.shared.topbar.tab_keywords','关键词')},{id:'replymode',label:t('ui.shared.topbar.tab_replymode','回复模式')},{id:'accounts',label:t('ui.shared.topbar.tab_accounts','账号')},{id:'groups',label:t('ui.shared.topbar.tab_groups','群聊')}];tb.innerHTML=tabs.map(t=>`<span class="tb-tab${currentSub===t.id?' active':''}" data-sub="${t.id}">${t.label}</span>`).join('');tb.querySelectorAll('.tb-tab').forEach(t=>t.addEventListener('click',()=>switchSub(t.dataset.sub)));switchSub(tabs.length?tabs[0].id:'');if(page==='guide'){loadDashboard();updateGuide()}else if(page==='status')loadDashboard();else if(page==='config')loadDashboard();else if(page==='sticker')loadStickers();else if(page==='review'){tabs=[{id:'overview',label:t('ui.shared.topbar.tab_overview','审阅')},{id:'memory',label:'群记忆'},{id:'profiles',label:'用户画像'}];tb.innerHTML=tabs.map(t=>`<span class="tb-tab${currentSub===t.id?' active':''}" data-sub="${t.id}">${t.label}</span>`).join('');tb.querySelectorAll('.tb-tab').forEach(t=>t.addEventListener('click',()=>switchSub(t.dataset.sub)));switchSub(tabs.length?tabs[0].id:'');if(currentSub==='overview')loadBacklog();else if(currentSub==='memory')loadGroupMemory();else if(currentSub==='profiles')loadUserProfiles()}else if(page==='prompts')loadPromptEditorState();else if(page==='logs'){loadLogs();startLogPoll()}if(page!=='logs')stopLogPoll()}
 function switchSub(sub){currentSub=sub;document.getElementById('content').scrollTop=0;document.querySelectorAll('#topbar .tb-tab').forEach(t=>t.classList.toggle('active',t.dataset.sub===sub));let pageId='page-'+currentPage+'-'+sub;let el=document.getElementById(pageId);if(!el)el=document.getElementById('page-'+currentPage);if(el){document.querySelectorAll('.page.active').forEach(e=>e.classList.remove('active'));el.classList.add('active')}if(currentPage==='prompts'&&sub==='groupprompts'){renderGroupPromptPage();loadGroupPrompts();applyGroupPromptI18n()}if(currentPage==='prompts'&&sub==='proactive'){renderProactivePage()}if(currentPage==='review'&&sub==='memory'){loadGroupMemory()}if(currentPage==='review'&&sub==='profiles'){loadUserProfiles()}}
  function applyAttentionHints(){document.querySelectorAll('.param-hint').forEach(function(el){var k=el.getAttribute('data-hint');if(!k)return;var txt=t(k,'');if(txt)el.setAttribute('data-title',txt);else el.removeAttribute('data-title')})}
- function applySettings(s){s=s||{};state.strategy=s.strategy_mode==='neko_scene'?'neko_scene':'neko_dynamic';state.replyMode=['text','voice','both'].includes(s.reply_mode)?s.reply_mode:'text';document.getElementById('cfg-url').value=s.onebot_url||'';document.getElementById('cfg-token').value=s.token||'';document.getElementById('cfg-path').value=s.napcat_directory||'';document.getElementById('cfg-show-napcat').checked=s.show_napcat_window!==!1;document.getElementById('cfg-strategy-mode').value=state.strategy;document.getElementById('scene-prob-card').style.display=state.strategy==='neko_scene'?'':'none';document.getElementById('cfg-retro-group').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('attention-card').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('attention-params-card').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('cfg-normal-prob').value=s.normal_relay_probability??.1;document.getElementById('cfg-truth-prob').value=s.truth_reply_probability??.1;document.querySelectorAll('#reply-mode-cards .radio-card').forEach(c=>c.classList.toggle('selected',c.dataset.mode===state.replyMode));document.getElementById('cfg-retro-max-msgs').value=s.retroactive_review_max_messages??30;document.getElementById('cfg-retro-max-reply').value=s.retroactive_review_max_reply??5;document.getElementById('cfg-enable-attention').checked=s.enable_group_attention!==!1;document.getElementById('cfg-att-rise-rate').value=s.attention_base_rise_rate??0.02;document.getElementById('cfg-att-decay').value=s.attention_fall_rate??0.015;document.getElementById('cfg-att-max').value=s.group_attention_max_score??10;document.getElementById('cfg-att-reply-penalty').value=s.attention_consume_ratio??0.10;document.getElementById('cfg-att-msg-gain').value=s.group_attention_message_gain??0.25;document.getElementById('cfg-att-kw-boost').value=s.attention_keyword_boost_ratio??1.8;document.getElementById('cfg-att-msg-recovery').value=s.attention_message_boost??0.15;document.getElementById('cfg-att-focus-threshold').value=s.group_attention_focus_threshold??4;document.getElementById('cfg-att-focus-send').value=s.group_attention_focus_send_threshold??2;document.getElementById('cfg-att-min-threshold').value=s.group_attention_min_threshold??1;document.getElementById('cfg-att-focus-rise').value=s.attention_honeymoon_seconds??60;document.getElementById('cfg-att-focus-cooldown').value=s.attention_fall_seconds??30;document.getElementById('cfg-icebreaker-threshold').value=s.icebreaker_cold_threshold??3;document.getElementById('cfg-local-stt-url').value=s.local_stt_url||'';var loc=s.locale||localStorage.getItem('qqbetter_auto_reply_locale')||'';var sel=document.getElementById('lang-select');if(sel&&loc)sel.value=loc;document.getElementById('cfg-group-memory').checked=s.group_memory_enabled===!0;document.getElementById('cfg-group-member-memory').checked=s.group_member_memory_enabled===!0;document.getElementById('cfg-private-participant-memory').checked=!!s.private_participant_memory_enabled;document.getElementById('cfg-cross-group-context').checked=s.allow_cross_group_context===!0;state.mode=(s.qq_connection_mode==='napcat_forward')?'napcat_forward':'napcat';document.querySelectorAll('#conn-direction-cards .radio-card').forEach(c=>c.classList.toggle('selected',c.dataset.direction===(state.mode==='napcat_forward'?'forward':'reverse')));updateDirectionUI();syncGroupMemoryDeps();applyAttentionHints();/* buffer UI hidden — LLM <wait> 标签接管 */}
+ function applySettings(s){s=s||{};state.strategy=s.strategy_mode==='neko_scene'?'neko_scene':'neko_dynamic';state.replyMode=['text','voice','both'].includes(s.reply_mode)?s.reply_mode:'text';document.getElementById('cfg-url').value=s.onebot_url||'';document.getElementById('cfg-token').value=s.token||'';document.getElementById('cfg-path').value=s.napcat_directory||'';document.getElementById('cfg-show-napcat').checked=s.show_napcat_window!==!1;document.getElementById('cfg-strategy-mode').value=state.strategy;document.getElementById('scene-prob-card').style.display=state.strategy==='neko_scene'?'':'none';document.getElementById('cfg-retro-group').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('attention-card').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('attention-params-card').style.display=state.strategy==='neko_scene'?'none':'';document.getElementById('cfg-normal-prob').value=s.normal_relay_probability??.1;document.getElementById('cfg-truth-prob').value=s.truth_reply_probability??.1;document.querySelectorAll('#reply-mode-cards .radio-card').forEach(c=>c.classList.toggle('selected',c.dataset.mode===state.replyMode));document.getElementById('cfg-retro-max-msgs').value=s.retroactive_review_max_messages??30;document.getElementById('cfg-retro-max-reply').value=s.retroactive_review_max_reply??5;document.getElementById('cfg-enable-attention').checked=s.enable_group_attention!==!1;document.getElementById('cfg-att-rise-rate').value=s.attention_base_rise_rate??0.02;document.getElementById('cfg-att-decay').value=s.attention_fall_rate??0.015;document.getElementById('cfg-att-max').value=s.group_attention_max_score??10;document.getElementById('cfg-att-reply-penalty').value=s.attention_consume_ratio??0.10;document.getElementById('cfg-att-msg-gain').value=s.group_attention_message_gain??0.25;document.getElementById('cfg-att-kw-boost').value=s.attention_keyword_boost_ratio??1.8;document.getElementById('cfg-att-msg-recovery').value=s.attention_message_boost??0.15;document.getElementById('cfg-att-focus-threshold').value=s.group_attention_focus_threshold??4;document.getElementById('cfg-att-focus-send').value=s.group_attention_focus_send_threshold??2;document.getElementById('cfg-att-min-threshold').value=s.group_attention_min_threshold??1;document.getElementById('cfg-att-focus-rise').value=s.attention_honeymoon_seconds??60;document.getElementById('cfg-att-focus-cooldown').value=s.attention_fall_seconds??30;document.getElementById('cfg-icebreaker-threshold').value=s.icebreaker_cold_threshold??3;document.getElementById('cfg-local-stt-url').value=s.local_stt_url||'';var loc=s.locale||localStorage.getItem('qqbetter_auto_reply_locale')||'';var sel=document.getElementById('lang-select');if(sel&&loc)sel.value=loc;document.getElementById('cfg-group-memory').checked=s.group_memory_enabled===!0;document.getElementById('cfg-group-member-memory').checked=s.group_member_memory_enabled===!0;document.getElementById('cfg-private-participant-memory').checked=!!s.private_participant_memory_enabled;document.getElementById('cfg-cross-group-context').checked=s.allow_cross_group_context===!0;document.getElementById('cfg-owner-private-memory').checked=s.cross_domain_owner_memory===!0;document.getElementById('cfg-owner-private-rounds').value=s.cross_domain_owner_context_rounds??8;document.getElementById('cfg-owner-longterm-memory').checked=s.cross_domain_owner_longterm_memory===!0;state.mode=(s.qq_connection_mode==='napcat_forward')?'napcat_forward':'napcat';document.querySelectorAll('#conn-direction-cards .radio-card').forEach(c=>c.classList.toggle('selected',c.dataset.direction===(state.mode==='napcat_forward'?'forward':'reverse')));updateDirectionUI();syncGroupMemoryDeps();applyAttentionHints();/* buffer UI hidden — LLM <wait> 标签接管 */}
 function applyDashboard(d){let s=d.settings||{},rt=d.runtime||{},lg=d.login||{};state.settings=s;state.running=rt.auto_reply_running||!1;state.onebotOk=rt.onebot_connected||!1;state.napcatPid=rt.napcat_pid||null;state.selfId=lg.self_id||'';state.nickname=lg.nickname||'';state.users=(d.permissions||{}).trusted_users||[];state.groups=(d.permissions||{}).trusted_groups||[];state.backlogItems=d.backlog_items||[];state.backlogLabels=Array.isArray(s.backlog_labels)?s.backlog_labels:[];applySettings(s);updateStatusBar();renderUsers();renderGroups();renderKeywords();let qr=rt.qrcode_url||'';document.getElementById('qr-img').src=qr?(qr+'?_ts='+Date.now()):'';document.getElementById('qr-img').style.display=qr?'':'none';document.getElementById('qr-empty').style.display=qr?'none':'';updateGuide();let traces=d.recent_pipeline_trace_summaries||[];if(traces.length)document.getElementById('traces-list').innerHTML=traces.map(t=>`<div style="padding:4px 0;border-bottom:1px solid #eee">[${escapeHtml(t.result_kind)||'?'}] ${escapeHtml(t.source)} -> ${escapeHtml(t.delivery_mode)}</div>`).join('')}
+/* 没连上时直接把「为什么」说清楚。
+   新装默认是反向监听 6199，而 LLBot / NapCat 用户多半开的是正向 WS 服务端
+   （3001 之类）——两边都在等对方，界面上一切正常、就是一条消息都不回。
+   这是装完最常见的一次踩空，比任何步骤说明都值得摆在最前面。 */
+function updateConnHint(){
+  var el=document.getElementById("guide-conn-hint");if(!el)return;
+  var s=state.settings||{};
+  var mode=s.qq_connection_mode||"napcat";
+  if(state.onebotOk||mode==="open_platform"){el.style.display="none";return}
+  var url=s.onebot_url||"";
+  var html;
+  if(mode==="napcat_forward"){
+    html='<b>还没连上。</b>当前是<b>正向连接</b>：插件主动去连 <code>'+escapeHtml(url||"（地址没填）")+'</code>。<br>'
+      +'检查三件事：后端（LLBot / NapCat）里开了 WebSocket <b>服务端</b>没有、端口和地址对不对、Token 是否一致。';
+  }else{
+    html='<b>还没连上。</b>当前是<b>反向连接</b>：插件自己开了 <code>'+escapeHtml(url||"ws://0.0.0.0:6199")+'</code> 等后端连进来。<br>'
+      +'<b>如果你用的是 LLBot / NapCat 的正向 WebSocket（最常见），这里就要改成「正向」</b>——否则两边都在等对方，谁也不会动。';
+  }
+  el.innerHTML='<div style="padding:12px 14px;background:rgba(239,68,68,.08);border-left:4px solid var(--danger);border-radius:6px;font-size:13px;line-height:1.85;color:#7f1d1d;">'
+    +html
+    +'<div style="margin-top:8px"><a href="javascript:switchPage(\'config\');switchSub(\'connection\')" style="color:var(--accent);font-weight:600;">&#8594; 去改连接设置</a></div></div>';
+  el.style.display="block";
+}
+
 async function updateGuide(){
-var done=0,total=9,items=[];
-function add(id,label,ok,hint){items.push({id:id,label:label,ok:ok,hint:hint});if(ok)done++}
+/* required 项计入进度条，optional 项只显示状态。
+   为什么分开：原来 9 项里有 5 项恒为 true（表情包/审阅/策略/Linux/排查），
+   装完什么都没配进度条就已经过半，那个百分比是假的。现在只有真正
+   决定「能不能用」的四步算数，其余是「还有什么能用」。 */
+var done=0,total=0,items=[];
+function add(id,label,ok,hint,optional){items.push({id:id,label:label,ok:ok,hint:hint,optional:!!optional});if(!optional){total++;if(ok)done++}}
 var url="",qr=document.getElementById("qr-img").src||"";state._napcatUrl="";
 try{var d=await call("get_napcat_webui");url=d.url||"";state._napcatUrl=url}catch(e){}
-var hasUrl=!!url,hasCfg=!!(state.settings.onebot_url)&&!!(state.settings.token),hasU=state.users&&state.users.length>0,isRun=state.running;
+/* B 站登录态与图库张数都靠本地读，不联网。失败不能假装成功——宁可
+   显示「读取失败」，也不要给一个假的绿勾，那会让人以为已经配好了。 */
+var bili=null,gal=null;
+try{bili=await call("get_bilibili_state")}catch(e){}
+try{gal=await call("gallery_lab",{action:"stats"})}catch(e){}
+/* 「填了地址和 token」不等于「连上了」：LLBot 的 token 本来就是空的，
+   按 `url && token` 判会让已经连上的机器一直显示"未配置"。反过来，
+   填了地址但没连上也不该打勾。以实际连接状态为准。 */
+var hasUrl=!!url,hasCfg=state.onebotOk||(!!(state.settings.onebot_url)&&!!(state.settings.token)),hasU=state.users&&state.users.length>0,isRun=state.running;
 add("step-napcat",t("ui.napcat.guide.step_napcat","NapCat 进程"),hasUrl||isRun,hasUrl?t("ui.napcat.guide.step_napcat_ok","WebUI 已就绪"):t("ui.napcat.guide.step_napcat_wait","等待启动"));
-add("step-onebot",t("ui.napcat.guide.step_onebot","OneBot 连接"),hasCfg,(hasCfg?t("ui.napcat.guide.step_onebot_ok","已配置"):t("ui.napcat.guide.step_onebot_fail","未配置")));
+add("step-onebot",t("ui.napcat.guide.step_onebot","OneBot 连接"),hasCfg,(hasCfg?t("ui.napcat.guide.step_onebot_ok","已配置"):(state.settings.onebot_url?t("ui.napcat.guide.step_onebot_unreachable","填了地址，但没连上"):t("ui.napcat.guide.step_onebot_fail","未配置"))));
 add("step-users",t("ui.napcat.guide.step_users","信任用户"),hasU,(hasU?tf("ui.napcat.guide.step_users_ok","{count} 个",{count:state.users.length}):t("ui.napcat.guide.step_onebot_fail","未配置")));
 add("step-running",t("ui.napcat.guide.step_running","自动回复"),isRun,(isRun?t("ui.napcat.guide.step_running_ok","已启动"):t("ui.napcat.guide.step_running_fail","未启动")));
-add("step-sticker",t("ui.napcat.guide.step_sticker","表情包管理"),!0,t("ui.napcat.guide.step_sticker_hint","上传和管理自定义表情包"));
-add("step-review",t("ui.napcat.guide.step_review","消息审阅"),!0,t("ui.napcat.guide.step_review_hint","查看未读消息和待处理请求"));
-add("step-strategy",t("ui.napcat.guide.step_strategy","猫娘策略"),!0,t("ui.napcat.guide.step_strategy_hint","注意力机制和回复策略配置"));
-add("step-linux",t("ui.napcat.guide.step_linux","Linux/Docker"),!0,t("ui.napcat.guide.step_linux_hint","宿主机/Docker/K8s 部署说明"));add("step-debug",t("ui.napcat.guide.step_debug","错误排查"),!0,t("ui.napcat.guide.step_debug_hint","常见问题解决和日志上报"));
+var biliLogged=!!(bili&&bili.login&&bili.login.logged_in);
+var biliBrowseOn=!!(state.settings&&state.settings.bilibili_browse_enabled);
+var biliHint=!bili?t("ui.napcat.guide.step_bili_unknown","读取失败，点开看详情")
+  :(biliLogged?(t("ui.napcat.guide.step_bili_ok","已登录")+(bili.login.name?": "+bili.login.name:"")):t("ui.napcat.guide.step_bili_fail","未登录（抓不到字幕）"));
+if(bili&&biliLogged) biliHint+=(biliBrowseOn?t("ui.napcat.guide.step_bili_browse_on","，定时刷视频已开"):t("ui.napcat.guide.step_bili_browse_off","，定时刷视频未开"));
+add("step-bilibili",t("ui.napcat.guide.step_bilibili","B 站登录"),biliLogged,biliHint,!0);
+var galTotal=(gal&&typeof gal.total==="number")?gal.total:null;
+var galHint=galTotal===null?t("ui.napcat.guide.step_gallery_unknown","读取失败，点开看详情")
+  :(galTotal>0?tf("ui.napcat.guide.step_gallery_ok","已存 {count} 张",{count:galTotal}):t("ui.napcat.guide.step_gallery_empty","还没存图（不影响使用）"));
+add("step-gallery",t("ui.napcat.guide.step_gallery","本地图库"),galTotal!==null&&galTotal>0,galHint,!0);
+var proOn=!!(state.settings&&state.settings.proactive_private_enabled);
+var proIdle=state.settings&&state.settings.proactive_private_min_idle_minutes;
+var proDaily=state.settings&&state.settings.proactive_private_daily_limit;
+var proHint=proOn?tf("ui.napcat.guide.step_proactive_on","闲置 {idle} 分钟开口，每天最多 {daily} 次",{idle:proIdle==null?30:proIdle,daily:proDaily==null?6:proDaily}):t("ui.napcat.guide.step_proactive_off","已关闭");
+add("step-proactive",t("ui.napcat.guide.step_proactive","私聊主动搭话"),proOn,proHint,!0);
+var schedOn=!!(state.settings&&state.settings.scheduled_greeting_enabled);
+var schedList=(state.settings&&state.settings.scheduled_greetings)||[];
+var schedHint=schedOn?(schedList.length?tf("ui.napcat.guide.step_sched_on","已启用，{count} 个定时时刻",{count:schedList.length}):t("ui.napcat.guide.step_sched_on_empty","已启用，但还没有添加定时时刻")):t("ui.napcat.guide.step_sched_off","已关闭");
+add("step-sched",t("ui.napcat.guide.step_sched","定时搭话"),schedOn&&schedList.length>0,schedHint,!0);
+var xdRecent=!!(state.settings&&state.settings.cross_domain_owner_memory);
+var xdLong=!!(state.settings&&state.settings.cross_domain_owner_longterm_memory);
+var xdHint=(!xdRecent&&!xdLong)?t("ui.napcat.guide.step_crossdomain_off","未打通，私聊和群聊各记各的")
+  :(xdRecent&&xdLong?t("ui.napcat.guide.step_crossdomain_both","最近对话 + 长期记忆都已打通")
+  :(xdRecent?t("ui.napcat.guide.step_crossdomain_recent","只打通了最近对话"):t("ui.napcat.guide.step_crossdomain_long","只打通了长期记忆")));
+add("step-crossdomain",t("ui.napcat.guide.step_crossdomain","私聊↔群 记忆打通"),xdRecent||xdLong,xdHint,!0);
+add("step-sticker",t("ui.napcat.guide.step_sticker","表情包管理"),!0,t("ui.napcat.guide.step_sticker_hint","上传和管理自定义表情包"),!0);
+add("step-review",t("ui.napcat.guide.step_review","消息审阅"),!0,t("ui.napcat.guide.step_review_hint","查看未读消息和待处理请求"),!0);
+add("step-strategy",t("ui.napcat.guide.step_strategy","猫娘策略"),!0,t("ui.napcat.guide.step_strategy_hint","注意力机制和回复策略配置"),!0);
+add("step-linux",t("ui.napcat.guide.step_linux","Linux/Docker"),!0,t("ui.napcat.guide.step_linux_hint","宿主机/Docker/K8s 部署说明"),!0);add("step-debug",t("ui.napcat.guide.step_debug","错误排查"),!0,t("ui.napcat.guide.step_debug_hint","常见问题解决和日志上报"),!0);
 document.getElementById("guide-progress-bar").style.width=(done/total*100)+"%";
+updateConnHint();
 document.getElementById("guide-list").innerHTML=items.map(function(s,i){
-var icon=s.ok?"<svg width=20 height=20 viewBox='0 0 20 20'><circle cx=10 cy=10 r=9 fill=var(--success) stroke=var(--success) stroke-width=2></circle><path d='M6 10l3 3 5-6' fill=none stroke=#fff stroke-width=2 stroke-linecap=round stroke-linejoin=round></path></svg>":"<svg width=20 height=20 viewBox='0 0 20 20'><circle cx=10 cy=10 r=9 fill=none stroke=#ccc stroke-width=2></circle><text x=10 y=15 text-anchor=middle fill=#999 font-size=12>"+(i+1)+"</text></svg>";
+/* 可选步骤未完成时画空心点，不画序号——序号会让人以为「第 5 步必须做」，
+   而这几个本来就是可以跳过的。 */
+var icon=s.ok?"<svg width=20 height=20 viewBox='0 0 20 20'><circle cx=10 cy=10 r=9 fill=var(--success) stroke=var(--success) stroke-width=2></circle><path d='M6 10l3 3 5-6' fill=none stroke=#fff stroke-width=2 stroke-linecap=round stroke-linejoin=round></path></svg>":(s.optional?"<svg width=20 height=20 viewBox='0 0 20 20'><circle cx=10 cy=10 r=9 fill=none stroke=#cbd5e1 stroke-width=2></circle><circle cx=10 cy=10 r=3 fill=#cbd5e1></circle></svg>":"<svg width=20 height=20 viewBox='0 0 20 20'><circle cx=10 cy=10 r=9 fill=none stroke=#ccc stroke-width=2></circle><text x=10 y=15 text-anchor=middle fill=#999 font-size=12>"+(i+1)+"</text></svg>");
 return"<div class=guide-task onclick=openGuideModal('"+escapeOnclick(s.id)+"')><div style=display:flex;align-items:center;gap:12px;padding:14px;background:"+(s.ok?"rgba(34,197,94,.04)":"#fff")+";border-radius:8px;border:1px solid "+(s.ok?"var(--success)":"var(--border)")+";margin-bottom:8px;cursor:pointer;transition:.15s>"+icon+"<div style=flex:1><div style=font-weight:600;font-size:14px>"+escapeHtml(s.label)+"</div><div style=font-size:11px;color:"+(s.ok?"var(--success)":"var(--text-secondary)")+">"+escapeHtml(s.hint)+"</div></div><span style=color:var(--accent);font-size:20px>&#8250;</span></div></div>"}).join("")}
-function openGuideModal(id){var titles={"step-napcat":t("ui.napcat.guide.modal_napcat","NapCat 进程配置"),"step-onebot":t("ui.napcat.guide.modal_onebot","OneBot 连接配置"),"step-users":t("ui.napcat.guide.modal_users","添加信任用户"),"step-running":t("ui.napcat.guide.modal_running","启动自动回复"),"step-sticker":t("ui.napcat.guide.modal_sticker","表情包管理"),"step-review":t("ui.napcat.guide.modal_review","消息审阅"),"step-strategy":t("ui.napcat.guide.modal_strategy","猫娘策略"),"step-linux":t("ui.napcat.guide.modal_linux","Linux/Docker 部署"),"step-debug":t("ui.napcat.guide.modal_debug","错误排查与上报")};
+function openGuideModal(id){var titles={"step-napcat":t("ui.napcat.guide.modal_napcat","NapCat 进程配置"),"step-onebot":t("ui.napcat.guide.modal_onebot","OneBot 连接配置"),"step-users":t("ui.napcat.guide.modal_users","添加信任用户"),"step-running":t("ui.napcat.guide.modal_running","启动自动回复"),"step-bilibili":t("ui.napcat.guide.modal_bilibili","B 站登录与刷视频"),"step-gallery":t("ui.napcat.guide.modal_gallery","本地图库存储位置"),"step-proactive":t("ui.napcat.guide.modal_proactive","私聊主动搭话间隔"),"step-sched":t("ui.napcat.guide.modal_sched","定时搭话"),"step-crossdomain":t("ui.napcat.guide.modal_crossdomain","私聊与群聊的记忆打通"),"step-sticker":t("ui.napcat.guide.modal_sticker","表情包管理"),"step-review":t("ui.napcat.guide.modal_review","消息审阅"),"step-strategy":t("ui.napcat.guide.modal_strategy","猫娘策略"),"step-linux":t("ui.napcat.guide.modal_linux","Linux/Docker 部署"),"step-debug":t("ui.napcat.guide.modal_debug","错误排查与上报")};
 document.getElementById("modal-title").textContent=titles[id]||"";
 // 引导弹窗按当前连接方向（正向/反向）切换「NapCat 进程配置」和「OneBot 连接配置」的说明
 var fwd=currentMode()==="napcat_forward";
@@ -476,8 +651,290 @@ var urlTx=document.querySelector("#modal-body #guide-napcat-url-text");
 var url=state._napcatUrl||"";
 if(urlEl)urlEl.href=url||"#";
 if(urlTx)urlTx.textContent=url?" ("+url.substring(0,60)+"...)":t("ui.napcat.guide.wait_napcat"," (等待 NapCat 启动...)");
+/* 三个功能面板要先把现值填进模态，否则用户看到一个空表单，会以为
+   配置没生效。填的是 state.settings（刚 loadDashboard 拉的），不是缓存。 */
+if(id==="step-bilibili")fillBiliGuide();
+else if(id==="step-gallery")fillGalleryGuide();
+else if(id==="step-proactive")fillProactiveGuide();
+else if(id==="step-sched")fillSchedGuide();
+else if(id==="step-crossdomain")fillCrossDomainGuide();
 document.getElementById("modal-confirm").style.display="none";
 document.getElementById("modal-bg").style.display="flex";setTimeout(function(){document.querySelectorAll("#modal-body img").forEach(function(img){img.style.cursor="zoom-in";img.onclick=function(e){e.stopPropagation();document.getElementById("img-lightbox-img").src=this.src;document.getElementById("img-lightbox").style.display="flex"}})},100)}
+/* ── 引导弹窗里的可操作面板 ─────────────────────────────────
+   modal-body 是 detail 模板的 innerHTML 复制品，所以页面里同 id 的元素
+   存在两份（隐藏的模板 + 弹窗里这份）。一律用 #modal-body 前缀查，
+   否则命中的是隐藏模板，改了看不出反应。 */
+function _gq(sel){return document.querySelector("#modal-body "+sel)}
+
+async function fillBiliGuide(){
+  var s=state.settings||{};
+  var en=_gq("#bili-guide-enabled"),iv=_gq("#bili-guide-interval");
+  if(en)en.checked=!!s.bilibili_browse_enabled;
+  if(iv)iv.value=(s.bilibili_browse_interval_minutes==null?60:s.bilibili_browse_interval_minutes);
+  await biliGuideRefresh(true);
+}
+
+async function biliGuideRefresh(quiet){
+  var box=_gq("#bili-guide-status");if(!box)return;
+  try{
+    var d=await call("get_bilibili_state");
+    var lg=d.login||{};
+    var h="";
+    if(lg.logged_in){
+      h+='<span style="color:var(--success);font-weight:600">已登录</span>';
+      if(lg.name)h+="："+escapeHtml(lg.name);
+      if(lg.saved_at)h+=' <span style="color:#999;font-size:12px">（'+new Date(lg.saved_at*1000).toLocaleString()+' 保存）</span>';
+    }else{
+      h+='<span style="color:var(--danger);font-weight:600">未登录</span> <span style="color:#999;font-size:12px">只能看标题和弹幕，抓不到字幕</span>';
+    }
+    h+='<br><span style="color:#666;font-size:12px">见闻库 '+escapeHtml(String(d.note_count==null?0:d.note_count))+' 条';
+    if(d.last_browse_human)h+='　上次刷：'+escapeHtml(d.last_browse_human);
+    if(d.running)h+='　<span style="color:var(--success)">循环运行中</span>';
+    h+='</span>';
+    /* 登录态过期在 B 站那边是静默的：字幕接口只回空列表、不报错。
+       login_health 是唯一能提前看出来的信号，有就显示，别藏着。 */
+    var health=d.login_health||{};
+    if(health.state&&health.state!=="ok"&&health.hint){
+      h+='<br><span style="color:var(--warning);font-size:12px">'+escapeHtml(health.hint)+'</span>';
+    }
+    if(d.last_error)h+='<br><span style="color:var(--danger);font-size:12px">上次出错：'+escapeHtml(String(d.last_error).slice(0,140))+'</span>';
+    box.innerHTML=h;
+  }catch(e){
+    if(!quiet)box.innerHTML='<span style="color:var(--danger)">读取失败：'+escapeHtml(e.message)+'</span>';
+    else box.innerHTML='<span style="color:#999">读取状态失败，可点「刷新状态」重试</span>';
+  }
+}
+
+async function biliGuideStart(){
+  var box=_gq("#bili-guide-status");
+  try{
+    if(box)box.innerHTML='正在生成二维码…';
+    var r=await call("bilibili_login_start",{force_new:true});
+    var qr=_gq("#bili-guide-qr"),wrap=_gq("#bili-guide-qrbox");
+    if(r&&r.qrcode_base64&&qr){
+      qr.src="data:image/png;base64,"+r.qrcode_base64;
+      if(wrap)wrap.style.display="block";
+    }
+    if(box){
+      var mins=r&&r.expires_in?("有效期约 "+Math.round(r.expires_in/60)+" 分钟。"):"";
+      box.innerHTML='二维码已生成，'+mins+'用 B 站 App 扫码后点「我扫好了」';
+    }
+  }catch(e){
+    if(box)box.innerHTML='<span style="color:var(--danger)">生成失败：'+escapeHtml(e.message)+'</span>';
+    toast('生成二维码失败: '+e.message);
+  }
+}
+
+async function biliGuideCheck(){
+  var box=_gq("#bili-guide-status");
+  try{
+    var r=await call("bilibili_login_check");
+    var st=r&&r.status;
+    if(st==="done"){
+      if(box)box.innerHTML='<span style="color:var(--success);font-weight:600">登录成功</span>';
+      var wrap=_gq("#bili-guide-qrbox");if(wrap)wrap.style.display="none";
+      toast('B 站登录成功',1);
+      await loadDashboard();await biliGuideRefresh(true);updateGuide();
+      return;
+    }
+    if(st==="none"||st==="expired"){
+      if(box)box.innerHTML='<span style="color:var(--danger)">'+(st==="none"?"还没生成二维码，先点「生成登录二维码」":"二维码过期了，重新生成一张")+'</span>';
+      return;
+    }
+    /* SCAN 这个名字不可信：B 站底层「未扫码」和「已扫未确认」在库里没分
+       干净，实测没人扫也会返回 SCAN。所以这里只说"没确认"，不说"已扫码"。 */
+    var map={pending:"还没扫到，或者扫了没在手机上确认",confirmed:"扫到了，等你在手机上点确认",timeout:"二维码超时，重新生成",waiting:"等扫码"};
+    if(box)box.innerHTML='<span style="color:var(--warning)">'+escapeHtml(map[st]||("状态："+st))+'</span>';
+  }catch(e){
+    if(box)box.innerHTML='<span style="color:var(--danger)">查询失败：'+escapeHtml(e.message)+'</span>';
+  }
+}
+
+async function biliGuideLogout(){
+  if(!confirm(t("ui.napcat.guide.bili_logout_confirm","确定退出 B 站登录？退出后字幕就抓不到了。")))return;
+  try{
+    await call("bilibili_logout");
+    toast('已退出 B 站登录',1);
+    await biliGuideRefresh(true);updateGuide();
+  }catch(e){toast('退出失败: '+e.message)}
+}
+
+async function biliGuideSave(){
+  var en=_gq("#bili-guide-enabled"),iv=_gq("#bili-guide-interval");
+  var v=(iv&&iv.value!=="")?parseInt(iv.value,10):60;
+  if(isNaN(v))v=60;
+  try{
+    var r=await call("save_settings",{bilibili_browse_enabled:!!(en&&en.checked),bilibili_browse_interval_minutes:v});
+    if(r&&r.persisted===!1){toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));return}
+    toast(t('ui.shared.toast.saved','设置已保存'),1);
+    await loadDashboard();updateGuide();
+  }catch(e){toast('保存失败: '+e.message)}
+}
+
+async function fillGalleryGuide(){
+  var s=state.settings||{};
+  var inp=_gq("#gal-guide-input");
+  if(inp)inp.value=s.gallery_dir||"";
+  await galleryGuideStats();
+}
+
+async function galleryGuideStats(){
+  try{
+    var d=await call("gallery_lab",{action:"stats"});
+    var p=_gq("#gal-guide-path"),c=_gq("#gal-guide-count"),ib=_gq("#gal-guide-inbox");
+    var root=d.root||"";
+    if(p)p.textContent=root||"—";
+    if(c)c.textContent=(d.total==null?0:d.total);
+    if(ib)ib.textContent=root?(root.replace(/[\\\/]+$/,"")+"/inbox"):"—";
+  }catch(e){toast('读取图库失败: '+e.message)}
+}
+
+async function galleryGuidePick(){
+  try{
+    var r=await call("pick_directory");
+    if(r&&r.path){var inp=_gq("#gal-guide-input");if(inp)inp.value=r.path}
+  }catch(e){
+    /* tkinter 在插件子进程里可能没有桌面会话，这时它自己会返回明确错误。
+       不用 toast 报一串异常名——直接告诉用户改怎么办。 */
+    toast('系统选目录窗口打不开，直接在输入框里填绝对路径');
+  }
+}
+
+async function galleryGuideSave(){
+  var inp=_gq("#gal-guide-input");
+  var v=inp?inp.value.trim():"";
+  try{
+    var r=await call("save_settings",{gallery_dir:v});
+    if(r&&r.persisted===!1){toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));return}
+    toast(v?'图库目录已保存':'已恢复默认目录',1);
+    await loadDashboard();await galleryGuideStats();updateGuide();
+  }catch(e){toast('保存失败: '+e.message)}
+}
+
+async function galleryGuideReset(){
+  var inp=_gq("#gal-guide-input");if(inp)inp.value="";
+  await galleryGuideSave();
+}
+
+async function galleryGuideImport(){
+  try{
+    var r=await call("gallery_lab",{action:"import"});
+    toast('导入完成：新增 '+(r.imported||0)+' 张，跳过 '+(r.skipped||0)+' 张，失败 '+(r.failed||0)+' 张',1);
+    await galleryGuideStats();updateGuide();
+  }catch(e){toast('导入失败: '+e.message)}
+}
+
+function fillProactiveGuide(){
+  var s=state.settings||{};
+  var en=_gq("#pro-guide-enabled");
+  if(en)en.checked=!!s.proactive_private_enabled;
+  [["#pro-guide-idle",s.proactive_private_min_idle_minutes,30],
+   ["#pro-guide-gap",s.proactive_private_min_gap_minutes,45],
+   ["#pro-guide-daily",s.proactive_private_daily_limit,6],
+   ["#pro-guide-check",s.proactive_private_check_interval_seconds,60]
+  ].forEach(function(p){var el=_gq(p[0]);if(el)el.value=(p[1]==null?p[2]:p[1])});
+}
+
+async function proactiveGuideSave(){
+  function num(sel,dft){var el=_gq(sel);if(!el||el.value==="")return dft;var v=parseFloat(el.value);return isNaN(v)?dft:v}
+  var en=_gq("#pro-guide-enabled");
+  try{
+    var r=await call("save_settings",{
+      proactive_private_enabled:!!(en&&en.checked),
+      proactive_private_min_idle_minutes:num("#pro-guide-idle",30),
+      proactive_private_min_gap_minutes:num("#pro-guide-gap",45),
+      proactive_private_daily_limit:num("#pro-guide-daily",6),
+      proactive_private_check_interval_seconds:num("#pro-guide-check",60)
+    });
+    if(r&&r.persisted===!1){toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));return}
+    toast(t('ui.shared.toast.saved','设置已保存'),1);
+    await loadDashboard();updateGuide();
+  }catch(e){toast('保存失败: '+e.message)}
+}
+
+/* ── 定时搭话面板 ──
+   行是动态渲染的：时间 + 她要做什么 + 删除。数据源是 state.settings.
+   scheduled_greetings，保存时整表回传（后端会清洗掉非法条目）。 */
+function fillSchedGuide(){
+  var s=state.settings||{};
+  var en=_gq("#sched-guide-enabled");
+  if(en)en.checked=!!s.scheduled_greeting_enabled;
+  var rows=(s.scheduled_greetings&&s.scheduled_greetings.length)?s.scheduled_greetings:[];
+  schedRenderRows(rows);
+}
+function schedRenderRows(rows){
+  var box=_gq("#sched-guide-rows");if(!box)return;
+  box.innerHTML=(rows||[]).map(function(r,i){
+    return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'
+      +'<input class="form-input sched-time" style="width:110px;flex:none" type="time" value="'+escapeHtml(r.time||'')+'">'
+      +'<input class="form-input sched-instr" style="flex:1" type="text" placeholder="到点让她做什么，如：说早安" value="'+escapeHtml(r.instruction||'')+'">'
+      +'<button class="btn btn-danger btn-sm" style="flex:none" onclick="schedRemoveRow(this)">'+t('ui.shared.btn.remove','移除')+'</button></div>';
+  }).join('')||'<div style="font-size:12px;color:#999;margin-bottom:8px">'+t('ui.napcat.guide.sched_no_rows','还没有定时条目，点下面「添加一条」')+'</div>';
+}
+function schedCollectRows(){
+  var box=_gq("#sched-guide-rows");if(!box)return[];
+  var rows=[];
+  box.querySelectorAll('.sched-time').forEach(function(timeEl){
+    var instrEl=timeEl.parentElement.querySelector('.sched-instr');
+    rows.push({time:(timeEl.value||'').trim(),instruction:instrEl?(instrEl.value||'').trim():''});
+  });
+  return rows;
+}
+function schedGuideAddRow(){
+  var rows=schedCollectRows();
+  rows.push({time:'',instruction:''});
+  schedRenderRows(rows);
+}
+function schedRemoveRow(btn){
+  /* 行是 innerHTML 重渲染的，直接按 DOM 删当前行再重 collect 会错位——
+     先 collect 再按索引删 */
+  var row=btn.parentElement;
+  var box=row.parentElement;
+  var idx=Array.prototype.indexOf.call(box.children,row);
+  var rows=schedCollectRows();
+  rows.splice(idx,1);
+  schedRenderRows(rows);
+}
+async function schedGuideSave(){
+  var en=_gq("#sched-guide-enabled");
+  var rows=schedCollectRows().filter(function(r){return r.time&&r.instruction});
+  try{
+    var r=await call("save_settings",{
+      scheduled_greeting_enabled:!!(en&&en.checked),
+      scheduled_greetings:rows
+    });
+    if(r&&r.persisted===!1){toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));return}
+    toast(t('ui.shared.toast.saved','设置已保存'),1);
+    await loadDashboard();updateGuide();
+  }catch(e){toast('保存失败: '+e.message)}
+}
+
+/* ── 私聊↔群 记忆打通面板 ──
+   两个独立开关、同一份轮数配置：最近对话读活会话内存，长期记忆读
+   legacy 语料，两者授权判据相同（发言人必须是名册里的 admin）。 */
+function fillCrossDomainGuide(){
+  var s=state.settings||{};
+  var recent=_gq("#xg-owner-recent");if(recent)recent.checked=!!s.cross_domain_owner_memory;
+  var longterm=_gq("#xg-owner-longterm");if(longterm)longterm.checked=!!s.cross_domain_owner_longterm_memory;
+  var rounds=_gq("#xg-owner-rounds");
+  if(rounds)rounds.value=(s.cross_domain_owner_context_rounds==null?8:s.cross_domain_owner_context_rounds);
+}
+async function crossDomainGuideSave(){
+  var recent=_gq("#xg-owner-recent"),longterm=_gq("#xg-owner-longterm"),rounds=_gq("#xg-owner-rounds");
+  var roundsVal=8;
+  if(rounds&&rounds.value!==""){var v=parseInt(rounds.value,10);if(!isNaN(v))roundsVal=v}
+  try{
+    var r=await call("save_settings",{
+      cross_domain_owner_memory:!!(recent&&recent.checked),
+      cross_domain_owner_longterm_memory:!!(longterm&&longterm.checked),
+      cross_domain_owner_context_rounds:roundsVal
+    });
+    if(r&&r.persisted===!1){toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));return}
+    toast(t('ui.shared.toast.saved','设置已保存'),1);
+    await loadDashboard();updateGuide();
+  }catch(e){toast('保存失败: '+e.message)}
+}
+
 function goGuide(link){if(link.indexOf('http://')===0||link.indexOf('https://')===0){window.open(link,'_blank')}else{var p=link.split(':');switchPage(p[0]);if(p[1])switchSub(p[1])}}function updateStatusBar(){document.getElementById('st-running').textContent=state.running?t('ui.shared.topbar.running','运行中'):t('ui.shared.topbar.stopped','未启动');document.getElementById('st-running').className='tag '+(state.running?'tag-running':'tag-offline');document.getElementById('st-onebot').textContent=state.onebotOk?t('ui.shared.topbar.connected','已连接'):t('ui.shared.topbar.disconnected','未连接');document.getElementById('st-onebot').className='tag '+(state.onebotOk?'tag-online':'tag-offline');document.getElementById('st-self-id').textContent=state.selfId||'-';document.getElementById('st-nickname').textContent=state.nickname||'-';document.getElementById('st-napcat-pid').textContent=state.napcatPid||'-';let cd=document.getElementById('conn-dot'),ct=document.getElementById('conn-text');cd.style.background=state.onebotOk?'var(--success)':'var(--danger)';ct.textContent=state.onebotOk?(state.selfId||t('ui.shared.topbar.connected','已连接')):t('ui.shared.topbar.disconnected','未连接');document.getElementById('status-dot').style.background=state.running?'var(--success)':'var(--danger)'}
 function renderUsers(){let tb=document.getElementById('user-table');if(!state.users.length){tb.innerHTML='<tr><td colspan="4" style="color:#999">'+t('ui.shared.render.no_users','暂无信任用户')+'</td></tr>';return}tb.innerHTML=state.users.map(function(u){return'<tr><td>'+escapeHtml(u.qq)+'</td><td>'+escapeHtml(u.nickname)+'</td><td>'+escapeHtml(u.level)+'</td><td><button class="btn btn-ghost btn-sm" onclick="showUserModal(\''+escapeOnclick(u.qq)+'\',\''+escapeOnclick(u.level)+'\',\''+escapeOnclick(u.nickname||'')+'\')">'+t('ui.shared.btn.edit','编辑')+'</button> <button class="btn btn-danger btn-sm" onclick="doRemoveUser(\''+escapeOnclick(u.qq)+'\')">'+t('ui.shared.btn.remove','移除')+'</button></td></tr>'}).join('')}
 function renderGroups(){var tb=document.getElementById('group-table');if(!state.groups.length){tb.innerHTML='<tr><td colspan="3" style="color:#999">'+t('ui.shared.render.no_groups','暂无信任群聊')+'</td></tr>';return}tb.innerHTML=state.groups.map(function(g){var eg=escapeOnclick(g.group_id),el=escapeOnclick(g.level);return'<tr><td>'+escapeHtml(g.group_id)+'</td><td>'+escapeHtml(g.level)+'</td><td><button class="btn btn-ghost btn-sm" onclick="showGroupModal(\''+eg+'\',\''+el+'\','+(g.normal_relay_probability!=null?g.normal_relay_probability:'null')+','+(g.open_reply_probability!=null?g.open_reply_probability:'null')+')">'+t('ui.shared.btn.edit','编辑')+'</button> <button class="btn btn-danger btn-sm" onclick="doRemoveGroup(\''+eg+'\')">'+t('ui.shared.btn.remove','移除')+'</button></td></tr>'}).join('')}
@@ -488,7 +945,7 @@ function applyAttentionInput(groupId){let v=parseFloat(document.getElementById('
 async function loadFatigue(){try{let d=await call("get_dashboard_state");let f=d.runtime&&d.runtime.fatigue;let el=document.getElementById("fatigue-content");if(!f||!f.available){el.innerHTML='<span style=color:#999>疲劳服务未启用</span>';return}var tf=f.total_fatigue||0;var barW=Math.min(100,tf);var barColor=tf>75?'var(--danger)':tf>45?'var(--warning)':tf>30?'var(--accent)':'var(--success)';var status=tf>75?'非常疲惫':tf>60?'挺累了':tf>45?'有点累':tf>30?'正常':'精力充沛';el.innerHTML='<div style=display:flex;align-items:center;gap:12px;margin-bottom:8px><span style=font-size:13px;font-weight:600>'+status+'</span><span style=font-size:12px;color:#999>'+tf.toFixed(0)+'/100</span></div><div style=height:8px;background:#eee;border-radius:4px;margin-bottom:8px><div style=height:8px;background:'+barColor+';width:'+barW+'%;border-radius:4px;transition:width .5s></div></div><div style=font-size:11px;color:#999>昼夜节律 '+f.circadian+' | 全局负载 '+f.global_load+'</div>'}catch(e){document.getElementById("fatigue-content").innerHTML='<span style=color:#999>加载失败</span>'}}
 async function loadDashboard(){try{let d=await call('get_dashboard_state');applyDashboard(d)}catch(e){console.error('loadDashboard failed',e)}}
  function isMaskedTokenPlaceholder(v){return /^[*●•]{3,8}$/.test(String(v||'').trim())}
-async function doSave(){try{let tokenValue=document.getElementById('cfg-token').value;let args={onebot_url:document.getElementById('cfg-url').value.trim(),napcat_directory:document.getElementById('cfg-path').value.trim(),show_napcat_window:document.getElementById('cfg-show-napcat').checked,qq_connection_mode:currentMode(),reply_mode:state.replyMode,strategy_mode:state.strategy,normal_relay_probability:floatVal('cfg-normal-prob',.1),truth_reply_probability:floatVal('cfg-truth-prob',.1),retroactive_review_max_messages:intVal('cfg-retro-max-msgs',30),retroactive_review_max_reply:intVal('cfg-retro-max-reply',5),enable_group_attention:document.getElementById('cfg-enable-attention').checked,attention_base_rise_rate:floatVal('cfg-att-rise-rate',0.02),attention_fall_rate:floatVal('cfg-att-decay',0.015),attention_message_boost:floatVal('cfg-att-msg-recovery',0.15),attention_consume_ratio:floatVal('cfg-att-reply-penalty',0.10),attention_keyword_boost_ratio:floatVal('cfg-att-kw-boost',1.8),attention_honeymoon_seconds:intVal('cfg-att-focus-rise',60),attention_fall_seconds:intVal('cfg-att-focus-cooldown',30),group_attention_max_score:floatVal('cfg-att-max',10),group_attention_focus_threshold:floatVal('cfg-att-focus-threshold',4),group_attention_focus_send_threshold:floatVal('cfg-att-focus-send',2),group_attention_min_threshold:floatVal('cfg-att-min-threshold',1),group_attention_message_gain:floatVal('cfg-att-msg-gain',0.25),icebreaker_cold_threshold:intVal('cfg-icebreaker-threshold',3),enable_group_attention:document.getElementById('cfg-enable-attention').checked,local_stt_url:document.getElementById('cfg-local-stt-url').value.trim(),local_stt_url:document.getElementById('cfg-local-stt-url').value.trim(),group_memory_enabled:document.getElementById('cfg-group-memory').checked,group_member_memory_enabled:document.getElementById('cfg-group-memory').checked&&document.getElementById('cfg-group-member-memory').checked,private_participant_memory_enabled:document.getElementById('cfg-private-participant-memory').checked,allow_cross_group_context:document.getElementById('cfg-cross-group-context').checked};if(!isMaskedTokenPlaceholder(tokenValue))args.token=tokenValue;if(state.backlogLabels&&state.backlogLabels.length)args.backlog_labels=state.backlogLabels;let r=await call('save_settings',args);if(r&&r.persisted===!1)toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));else{toast(t('ui.shared.toast.saved','设置已保存'),!0);_settingsDirty=!1}await loadDashboard()}catch(e){toast(t('ui.shared.toast.save_failed_prefix','保存失败: ')+e.message)}}
+async function doSave(){try{let tokenValue=document.getElementById('cfg-token').value;let args={onebot_url:document.getElementById('cfg-url').value.trim(),napcat_directory:document.getElementById('cfg-path').value.trim(),show_napcat_window:document.getElementById('cfg-show-napcat').checked,qq_connection_mode:currentMode(),reply_mode:state.replyMode,strategy_mode:state.strategy,normal_relay_probability:floatVal('cfg-normal-prob',.1),truth_reply_probability:floatVal('cfg-truth-prob',.1),retroactive_review_max_messages:intVal('cfg-retro-max-msgs',30),retroactive_review_max_reply:intVal('cfg-retro-max-reply',5),enable_group_attention:document.getElementById('cfg-enable-attention').checked,attention_base_rise_rate:floatVal('cfg-att-rise-rate',0.02),attention_fall_rate:floatVal('cfg-att-decay',0.015),attention_message_boost:floatVal('cfg-att-msg-recovery',0.15),attention_consume_ratio:floatVal('cfg-att-reply-penalty',0.10),attention_keyword_boost_ratio:floatVal('cfg-att-kw-boost',1.8),attention_honeymoon_seconds:intVal('cfg-att-focus-rise',60),attention_fall_seconds:intVal('cfg-att-focus-cooldown',30),group_attention_max_score:floatVal('cfg-att-max',10),group_attention_focus_threshold:floatVal('cfg-att-focus-threshold',4),group_attention_focus_send_threshold:floatVal('cfg-att-focus-send',2),group_attention_min_threshold:floatVal('cfg-att-min-threshold',1),group_attention_message_gain:floatVal('cfg-att-msg-gain',0.25),icebreaker_cold_threshold:intVal('cfg-icebreaker-threshold',3),enable_group_attention:document.getElementById('cfg-enable-attention').checked,local_stt_url:document.getElementById('cfg-local-stt-url').value.trim(),local_stt_url:document.getElementById('cfg-local-stt-url').value.trim(),group_memory_enabled:document.getElementById('cfg-group-memory').checked,group_member_memory_enabled:document.getElementById('cfg-group-memory').checked&&document.getElementById('cfg-group-member-memory').checked,private_participant_memory_enabled:document.getElementById('cfg-private-participant-memory').checked,allow_cross_group_context:document.getElementById('cfg-cross-group-context').checked,cross_domain_owner_memory:document.getElementById('cfg-owner-private-memory').checked,cross_domain_owner_longterm_memory:document.getElementById('cfg-owner-longterm-memory').checked,cross_domain_owner_context_rounds:intVal('cfg-owner-private-rounds',8)};if(!isMaskedTokenPlaceholder(tokenValue))args.token=tokenValue;if(state.backlogLabels&&state.backlogLabels.length)args.backlog_labels=state.backlogLabels;let r=await call('save_settings',args);if(r&&r.persisted===!1)toast(t('ui.shared.toast.save_failed','保存失败（写入磁盘失败）'));else{toast(t('ui.shared.toast.saved','设置已保存'),!0);_settingsDirty=!1}await loadDashboard()}catch(e){toast(t('ui.shared.toast.save_failed_prefix','保存失败: ')+e.message)}}
 async function doStart(){try{var mode=currentMode();/* 先捕获方向再刷新：loadDashboard 会用已保存配置重置方向卡片，晚读就拿到旧方向 */await loadDashboard();await call('save_settings',{qq_connection_mode:mode});await call('start_auto_reply');toast(t('ui.shared.toast.started','已启动'),!0);await loadDashboard();startStatusPoll()}catch(e){toast(t('ui.shared.toast.start_failed_prefix','启动失败: ')+e.message)}}
 async function doStop(){try{await call('stop_auto_reply');toast(t('ui.shared.toast.stopped','已停止'),!0);await loadDashboard();stopStatusPoll()}catch(e){toast(t('ui.shared.toast.stop_failed_prefix','停止失败: ')+e.message)}}
 async function doSyncQrcode(){try{await call('sync_qrcode');await loadDashboard();toast(t('ui.shared.toast.refreshed','已刷新'),!0)}catch(e){toast(t('ui.shared.toast.refresh_failed_prefix','刷新失败: ')+e.message)}}

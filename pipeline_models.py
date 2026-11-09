@@ -20,6 +20,8 @@ class QQPipelineStageTrace:
 # 私人事实去生成公开发言。
 SYNTHETIC_SOURCE_KINDS = frozenset({
     "proactive_speech",
+    "proactive_private",
+    "proactive_group",
     "rapid_fire_flush",
     "buffer_delayed",
     "retroactive_review",
@@ -139,6 +141,12 @@ class QQInstructionBundle:
     # 一并撤除、同样计入授权依赖（私聊轮的话题段恒为空，此前那条路径根本
     # 没有可撤的依赖）。
     cross_session_section: str = ""
+    # 私聊→群 的注入段原文（仅主人本人在群里发言时才有内容）：与跨群段
+    # 同为跨域披露，开关在构建后到生成前的窗口里被关掉时按原文摘除。
+    owner_private_section: str = ""
+    # 私聊长期记忆→群 的注入段原文：与上面那段是两个开关，撤销时各撤各的
+    # （只带最近对话、不带旧事，是用户能分别选的两种披露力度）。
+    owner_longterm_section: str = ""
     # core memory 段是否含 participant 域内容：member 开关在后续 await
     # 窗口里被关掉时，该段要按同样方式撤除。
     used_member_subject: bool = False
@@ -193,6 +201,10 @@ class QQReplyContext:
     cross_group_section: str = ""
     # 同上，活跃会话清单段。
     cross_session_section: str = ""
+    # 同上，主人私聊→群聊的注入段（仅主人发言的群轮可能非空）。
+    owner_private_section: str = ""
+    # 同上，主人私聊**长期记忆**→群聊的注入段（独立开关，独立撤销）。
+    owner_longterm_section: str = ""
     # core memory 段是否含 participant 域：member 授权在生成前被撤销时
     # 该段（及混合域召回）要一并撤除。
     used_member_subject: bool = False

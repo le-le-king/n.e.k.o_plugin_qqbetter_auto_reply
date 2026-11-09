@@ -69,6 +69,7 @@ from .reply_postprocess_node import QQReplyPostprocessNode
 from .reply_relay_node import QQReplyRelayNode
 from .runtime_ops_service import QQProactiveMessageService, QQRuntimeOpsService
 from .runtime_service import QQRuntimeService
+from .scheduled_greeting_service import QQScheduledGreetingService
 from .search_tool_service import QQSearchToolService
 from .session import QQAutoReplySessionMixin
 from .session_bootstrap_service import QQSessionBootstrapService
@@ -157,6 +158,9 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         # 历史对账，把漏掉的补回正常管道。
         self.catchup_service = QQMessageCatchupService(self)
         self.proactive_private_service = QQProactivePrivateService(self)
+        # 定时搭话：主人提前定「几点说什么」，到点模型自由发挥发私聊。
+        # 依赖 proactive_message_service（构造顺序在它之后）。
+        self.scheduled_greeting_service = QQScheduledGreetingService(self)
         # B 站见闻：登录服务要先生成（刷取服务每轮从它这里同步登录态）
         self.bilibili_login_service = QQBilibiliLoginService(self)
         self.bilibili_browse_service = QQBilibiliBrowseService(self)
@@ -1492,7 +1496,7 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         return Err(SdkError(f"INVALID_INPUT: 不认识的 action {act!r}"))
 
     @ui.action(id="save_settings", label=tr("entries.save_settings.name", default="保存 QQ 自动回复设置"), refresh_context=True)
-    @plugin_entry(id="save_settings", name=tr("entries.save_settings.name", default="保存 QQ 自动回复设置"), description=tr("entries.save_settings.description", default="保存 QQ 插件当前的 OneBot 地址、Token、NapCat 路径、回复概率和 backlog 标签等设置。"), input_schema={"type": "object", "properties": {"onebot_url": {"type": "string"}, "token": {"type": "string"}, "napcat_directory": {"type": "string"}, "show_napcat_window": {"type": "boolean"}, "reply_mode": {"type": "string", "enum": ["text", "voice", "both"]}, "show_onboarding": {"type": "boolean"}, "guide_step_napcat_done": {"type": "boolean"}, "guide_step_config_done": {"type": "boolean"}, "guide_step_runtime_done": {"type": "boolean"}, "normal_relay_probability": {"type": "number"}, "truth_reply_probability": {"type": "number"}, "backlog_labels": {"type": "array", "items": {"type": "object"}}, "strategy_mode": {"type": "string", "enum": ["neko_dynamic", "neko_scene"]}, "qq_connection_mode": {"type": "string", "enum": ["napcat", "napcat_forward", "open_platform"]}, "qq_open_app_id": {"type": "string"}, "qq_open_client_secret": {"type": "string"}, "qq_open_identity_probe_enabled": {"type": "boolean"}, "retroactive_review_max_messages": {"type": "integer"}, "retroactive_review_max_reply": {"type": "integer"}, "group_memory_enabled": {"type": "boolean"}, "group_member_memory_enabled": {"type": "boolean"}, "private_participant_memory_enabled": {"type": "boolean"}, "allow_cross_group_context": {"type": "boolean"}}, "additionalProperties": False})
+    @plugin_entry(id="save_settings", name=tr("entries.save_settings.name", default="保存 QQ 自动回复设置"), description=tr("entries.save_settings.description", default="保存 QQ 插件当前的 OneBot 地址、Token、NapCat 路径、回复概率、图库目录、主动搭话间隔、B 站刷视频开关和 backlog 标签等设置。"), input_schema={"type": "object", "properties": {"onebot_url": {"type": "string"}, "token": {"type": "string"}, "napcat_directory": {"type": "string"}, "show_napcat_window": {"type": "boolean"}, "reply_mode": {"type": "string", "enum": ["text", "voice", "both"]}, "show_onboarding": {"type": "boolean"}, "guide_step_napcat_done": {"type": "boolean"}, "guide_step_config_done": {"type": "boolean"}, "guide_step_runtime_done": {"type": "boolean"}, "normal_relay_probability": {"type": "number"}, "truth_reply_probability": {"type": "number"}, "backlog_labels": {"type": "array", "items": {"type": "object"}}, "strategy_mode": {"type": "string", "enum": ["neko_dynamic", "neko_scene"]}, "qq_connection_mode": {"type": "string", "enum": ["napcat", "napcat_forward", "open_platform"]}, "qq_open_app_id": {"type": "string"}, "qq_open_client_secret": {"type": "string"}, "qq_open_identity_probe_enabled": {"type": "boolean"}, "retroactive_review_max_messages": {"type": "integer"}, "retroactive_review_max_reply": {"type": "integer"}, "group_memory_enabled": {"type": "boolean"}, "group_member_memory_enabled": {"type": "boolean"}, "private_participant_memory_enabled": {"type": "boolean"}, "allow_cross_group_context": {"type": "boolean"}, "cross_domain_owner_memory": {"type": "boolean"}, "cross_domain_owner_context_rounds": {"type": "integer"}, "cross_domain_owner_longterm_memory": {"type": "boolean"}, "local_stt_url": {"type": "string"}, "gallery_dir": {"type": "string"}, "proactive_private_enabled": {"type": "boolean"}, "proactive_private_min_idle_minutes": {"type": "number"}, "proactive_private_min_gap_minutes": {"type": "number"}, "proactive_private_daily_limit": {"type": "number"}, "proactive_private_check_interval_seconds": {"type": "number"}, "scheduled_greeting_enabled": {"type": "boolean"}, "scheduled_greetings": {"type": "array", "items": {"type": "object", "properties": {"time": {"type": "string"}, "instruction": {"type": "string"}, "target": {"type": "string"}}, "required": ["time", "instruction"]}}, "scheduled_greeting_check_interval_seconds": {"type": "number"}, "bilibili_browse_enabled": {"type": "boolean"}, "bilibili_browse_interval_minutes": {"type": "integer"}}, "additionalProperties": False})
     async def save_settings(
         self,
         onebot_url: Optional[str] = None,
@@ -1526,12 +1530,26 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
         group_member_memory_enabled: Optional[bool] = None,
         private_participant_memory_enabled: Optional[bool] = None,
         allow_cross_group_context: Optional[bool] = None,
+        cross_domain_owner_memory: Optional[bool] = None,
+        cross_domain_owner_context_rounds: Optional[int] = None,
+        cross_domain_owner_longterm_memory: Optional[bool] = None,
         strategy_mode: Optional[str] = None,
         qq_connection_mode: Optional[str] = None,
         qq_open_app_id: Optional[str] = None,
         qq_open_client_secret: Optional[str] = None,
         qq_open_identity_probe_enabled: Optional[bool] = None,
         local_stt_url: Optional[str] = None,
+        gallery_dir: Optional[str] = None,
+        proactive_private_enabled: Optional[bool] = None,
+        proactive_private_min_idle_minutes: Optional[float] = None,
+        proactive_private_min_gap_minutes: Optional[float] = None,
+        proactive_private_daily_limit: Optional[float] = None,
+        proactive_private_check_interval_seconds: Optional[float] = None,
+        scheduled_greeting_enabled: Optional[bool] = None,
+        scheduled_greetings: Optional[list[dict[str, Any]]] = None,
+        scheduled_greeting_check_interval_seconds: Optional[float] = None,
+        bilibili_browse_enabled: Optional[bool] = None,
+        bilibili_browse_interval_minutes: Optional[int] = None,
         **_,
     ):
         return await self.dashboard_service.save_settings(
@@ -1566,12 +1584,26 @@ class QQAutoReplyPlugin(QQAutoReplySessionMixin, QQAutoReplyPromptingMixin, QQAu
             group_member_memory_enabled=group_member_memory_enabled,
             private_participant_memory_enabled=private_participant_memory_enabled,
             allow_cross_group_context=allow_cross_group_context,
+            cross_domain_owner_memory=cross_domain_owner_memory,
+            cross_domain_owner_context_rounds=cross_domain_owner_context_rounds,
+            cross_domain_owner_longterm_memory=cross_domain_owner_longterm_memory,
             strategy_mode=strategy_mode,
             qq_connection_mode=qq_connection_mode,
             qq_open_app_id=qq_open_app_id,
             qq_open_client_secret=qq_open_client_secret,
             qq_open_identity_probe_enabled=qq_open_identity_probe_enabled,
             local_stt_url=local_stt_url,
+            gallery_dir=gallery_dir,
+            proactive_private_enabled=proactive_private_enabled,
+            proactive_private_min_idle_minutes=proactive_private_min_idle_minutes,
+            proactive_private_min_gap_minutes=proactive_private_min_gap_minutes,
+            proactive_private_daily_limit=proactive_private_daily_limit,
+            proactive_private_check_interval_seconds=proactive_private_check_interval_seconds,
+            scheduled_greeting_enabled=scheduled_greeting_enabled,
+            scheduled_greetings=scheduled_greetings,
+            scheduled_greeting_check_interval_seconds=scheduled_greeting_check_interval_seconds,
+            bilibili_browse_enabled=bilibili_browse_enabled,
+            bilibili_browse_interval_minutes=bilibili_browse_interval_minutes,
         )
 
     @ui.action(id="add_trusted_user", label=tr("entries.add_trusted_user.name", default="添加信任用户"), refresh_context=True)
