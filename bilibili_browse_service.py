@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .bilibili_client import BilibiliClient
+from .host_watch_service import HostWatchService
 
 #: 对话里给她用的工具名。聊天消息命中视频话题时，她可以调它去"回想"。
 BILIBILI_TOOL_NAME = "bilibili_recent"
@@ -184,6 +185,9 @@ class QQBilibiliBrowseService:
         self.plugin = plugin
         self._logger = plugin.logger
         self.client = BilibiliClient(plugin.logger)
+        #: 项目自己的 watch-together：选片（discover）和深看（prepare）都走它。
+        #: 插件只保留"把结果收进见闻库"这件事，见模块头的说明。
+        self.host_watch = HostWatchService(plugin)
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self._state: dict[str, Any] = {
@@ -199,6 +203,15 @@ class QQBilibiliBrowseService:
         self._state_loaded = False
         self.last_skip_reason = ""
         self.last_error = ""
+        #: 最近一次"宿主深看没成"的原因。写进状态面板，省得只剩"深看 0 条"。
+        self._host_error = ""
+        #: 宿主 watch-together 的熔断时刻。免费 TTS 忙的时候 prepare 会一直卡在
+        #: 合成阶段不出来，一条就吃满整个超时（实测 240s）。一轮五条就是二十分钟，
+        #: 而结果是零——所以第一条超时之后，本轮剩下的直接走本地抓取，
+        #: 熔断半小时再试。
+        self._host_cooldown_until = 0.0
+        #: 本轮已经让宿主深看过几条（见 _host_deep_cap）。
+        self._host_deep_used = 0
         #: 循环心跳。见 running 的注释：宿主可能回收后台任务，
         #: 光看 _task 不够。
         self._heartbeat_at = 0.0
@@ -459,7 +472,84 @@ class QQBilibiliBrowseService:
     # ── 候选池 ──
 
     async def _collect_candidates(self, batch_size: int) -> tuple[list[dict[str, Any]], list[str]]:
-        """三条来源混成一个池子：兴趣词、热门、上一条的相关推荐。"""
+        """候选池：先问项目自己的刷视频逻辑，它给不出再退回自搜。
+
+        N.E.K.O 的 watch-together 有自己一套很硬的判定（单 P、三分钟以内、
+        每分钟弹幕 > 100），一次只给一条——所以这里按兴趣词逐个问，拿已经
+        看过的 bvid 去重，直到凑够一屏或者问完为止。这样"看什么"是项目的
+        决定，插件不再自己按播放量/时长算分。
+        """
+        if self._host_mode():
+            pool, topics = await self._collect_from_host(batch_size)
+            if pool:
+                return pool, topics
+            self._logger.info("[BiliBrowse] 宿主 discover 没给候选，退回自搜")
+        return await self._collect_by_self(batch_size)
+
+    def _host_mode(self) -> bool:
+        return bool(self._cfg("bilibili_host_watch", True))
+
+    async def _collect_from_host(
+        self, batch_size: int,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        keywords = self._keywords()
+        random.shuffle(keywords)
+        topics = keywords[: max(1, batch_size)]
+        # 空 topic 在宿主那边走的是全站热门，不是兴趣词。掺多少由原有比例控。
+        if float(self._cfg("bilibili_hot_ratio", 0.15) or 0) > 0:
+            topics = [""] + topics
+
+        seen = set(self._state.get("seen") or {})
+        pool: list[dict[str, Any]] = []
+        used: list[str] = []
+        for topic in topics:
+            if len(pool) >= batch_size:
+                break
+            self._logger.info(f"[BiliBrowse] 问宿主 topic={topic!r}（已备 {len(pool)} 条）")
+            # 排除列表要够长，否则宿主的 discover 每个兴趣词都只会给出**同一条**
+            # 搜出来最靠前的视频，看过一次之后整条路就永远返回"已看过"。
+            # 但也不能太长：实测 128 条时宿主会带着排除项一路翻页，把主服务
+            # 拖到不响应。30 条是"能往下翻几页、又不至于卡死"的折中。
+            video = await self.host_watch.discover(topic, exclude=list(seen)[-30:])
+            if video is None and self.host_watch.last_error:
+                self._logger.info(
+                    f"[BiliBrowse] 宿主 discover 报错，本轮不再问：{self.host_watch.last_error}"
+                )
+                break
+            self._logger.info(f"[BiliBrowse] 宿主答 topic={topic!r} -> {video.get('bvid') if video else '无'}")
+            if not video:
+                continue
+            bvid = str(video.get("bvid") or "").strip()
+            if not bvid or bvid in seen:
+                continue
+            seen.add(bvid)
+            used.append(topic or "热门")
+            pool.append(self._host_video_note(video))
+        return pool, used
+
+    @staticmethod
+    def _host_video_note(video: dict[str, Any]) -> dict[str, Any]:
+        """把宿主 discover 的字段翻译成见闻库的字段。
+
+        宿主的返回里没有 UP 名、播放量、简介——它只保证"这条值得看"。
+        缺的字段留空，不编造：见闻库里写 0 播放比写个假数字诚实得多。
+        """
+        topic = str(video.get("topic") or "").strip()
+        return {
+            "bvid": str(video.get("bvid") or ""),
+            "title": str(video.get("title") or ""),
+            "up": str(video.get("up") or ""),
+            "duration": int(float(video.get("duration") or 0)),
+            "play": int(float(video.get("play") or 0)),
+            "danmaku_count": int(float(video.get("danmaku") or 0)),
+            "desc": "",
+            "tags": [],
+            "source": f"热门（项目）" if not topic else f"兴趣·{topic}（项目）",
+            "url": str(video.get("url") or ""),
+        }
+
+    async def _collect_by_self(self, batch_size: int) -> tuple[list[dict[str, Any]], list[str]]:
+        """旧的候选池：兴趣词 + 热门 + 上一条的相关推荐（宿主不可用时的退路）。"""
         keywords = self._keywords()
         pool: list[dict[str, Any]] = []
         used: list[str] = []
@@ -527,11 +617,13 @@ class QQBilibiliBrowseService:
 
     @staticmethod
     def _is_hollow(note: dict[str, Any]) -> bool:
-        """这条"深看"是不是看了个空壳：既没弹幕也没字幕。
+        """这条"深看"是不是看了个空壳：既没弹幕也没字幕、也没有她的反应。
 
-        两种情况都不算：新视频本来没人发弹幕；UP 没开字幕。但拿去当谈资的
-        素材一点没有，占着深看名额就是浪费——名额该让给别的。
+        三种情况都不算：新视频本来没人发弹幕；UP 没开字幕；宿主的准备没跑出
+        反应台词。但拿去当谈资的素材一点没有，占着深看名额就是浪费。
         """
+        if note.get("reactions"):
+            return False
         return not (note.get("danmaku_samples") or note.get("subtitle_excerpt"))
 
     async def _judge_login_health(
@@ -576,6 +668,77 @@ class QQBilibiliBrowseService:
         }
 
     async def _watch(self, video: dict[str, Any]) -> dict[str, Any]:
+        """深看一条：先让宿主真的看一遍，拿她自己的反应。
+
+        宿主的 prepare 会把视频抽帧做视觉分析、抽热点，再按人设产出反应台词。
+        那是"她看过"的证据，比插件抓几条弹幕样本扎实。失败（最常见的是免费
+        TTS 并发满了，见 host_watch_service 模块头）就退回自抓素材，别让整轮
+        刷 B 站因为一条视频塌掉。
+        """
+        if (self._host_mode() and time.time() >= self._host_cooldown_until
+                and self._host_deep_used < self._host_deep_cap()):
+            self._host_deep_used += 1
+            seen = await self._watch_by_host(video)
+            if seen.get("ok"):
+                return self._note_from_host(video, seen)
+            self._host_error = str(seen.get("error") or "")
+            self._logger.info(
+                f"[BiliBrowse] 宿主深看没成（{self._host_error}），退回自抓弹幕/字幕: {video.get('bvid')}"
+            )
+            # 熔断：超时说明宿主那条合成链路正卡着，本轮剩下的不必再各等一遍。
+            self._host_cooldown_until = time.time() + (
+                1800 if seen.get("timed_out") else 300
+            )
+        return await self._watch_local(video)
+
+    async def _watch_by_host(self, video: dict[str, Any]) -> dict[str, Any]:
+        bvid = str(video.get("bvid") or "")
+        url = str(video.get("url") or "").strip()
+        if not url and bvid:
+            url = f"https://www.bilibili.com/video/{bvid}"
+        if not url:
+            return {"ok": False, "error": "没有可提交的视频地址"}
+        timeout = float(self._cfg("bilibili_host_watch_timeout_seconds", 420) or 420)
+        return await self.host_watch.watch(url, timeout=timeout)
+
+    def _host_deep_cap(self) -> int:
+        """一轮最多让宿主深看几条。
+
+        宿主同一时刻只受理一个 prepare，而且一条要跑两三分钟（视觉分析占一半，
+        剩下是等免费 TTS 有空合成她的台词）。实测一条刚跑完是 `ready` + 15 条
+        反应，但整个准备期约 240 秒，期间宿主那个唯一槽位是被占住的。所以默认
+        一轮只深看一条：够她聊，也不至于把整轮刷取拖到十几分钟。
+        """
+        try:
+            return max(0, int(self._cfg("bilibili_host_deep_max", 1)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _note_from_host(self, video: dict[str, Any], seen: dict[str, Any]) -> dict[str, Any]:
+        """宿主的深看结果 → 见闻库条目。"""
+        reactions = [str(item) for item in (seen.get("reactions") or []) if str(item).strip()]
+        return {
+            "bvid": str(video.get("bvid") or ""),
+            "title": str(seen.get("title") or video.get("title") or ""),
+            "up": str(video.get("up") or ""),
+            "duration": int(float(seen.get("duration") or video.get("duration") or 0)),
+            "play": int(float(video.get("play") or 0)),
+            "danmaku_count": int(float(video.get("danmaku_count") or 0)),
+            "desc": str(video.get("desc") or ""),
+            "tags": list(video.get("tags") or []),
+            "source": str(video.get("source") or ""),
+            "score": video.get("score") or 0,
+            "watched_at": time.time(),
+            "deep": True,
+            "watched_by": "neko_watch_together",
+            "host_job": str(seen.get("job") or ""),
+            #: 她看完这条自己说的话。对话时直接当谈资用，不用再猜视频讲了什么。
+            "reactions": reactions,
+            "danmaku_samples": [],
+            "subtitle_excerpt": "",
+        }
+
+    async def _watch_local(self, video: dict[str, Any]) -> dict[str, Any]:
         bvid = video["bvid"]
         detail = await self.client.video_detail(bvid)
         note = {
@@ -623,12 +786,25 @@ class QQBilibiliBrowseService:
         async with self._lock:
             self._load_state()
             started = time.monotonic()
+            self._host_deep_used = 0
             batch_size = max(5, min(int(self._cfg("bilibili_browse_batch_size", 20) or 20), 50))
             deep_count = max(0, min(int(self._cfg("bilibili_browse_deep_count", 5) or 5), batch_size))
 
             await self._sync_credential()
 
+            # 每轮都留一行"我还活着、正要刷什么"的日志。没有这行的话，
+            # 一轮卡在某一步时日志上只剩上一轮的"循环进入主循环"，
+            # 看不出它是在收集、在挑片、还是在等宿主合成。
+            warm = str(self._cfg("bilibili_browse_keywords", "") or "").strip()
+            self._logger.info(
+                f"[BiliBrowse] 开始一轮 关键词={warm or '（未配置）'} 每轮={batch_size}条 深看={deep_count}条 "
+                f"宿主深看={'开' if self._host_mode() else '关'}"
+                f"{('（本轮最多' + str(self._host_deep_cap()) + '条）') if self._host_mode() else ''}"
+                f"{'（熔断中）' if time.time() < self._host_cooldown_until else ''}"
+            )
+
             pool, keywords = await self._collect_candidates(batch_size)
+            self._logger.info(f"[BiliBrowse] 收集到 {len(pool)} 条候选（关键词 {len(keywords)} 个）")
             if not pool:
                 self.last_error = "候选池为空（搜索和热门都没拿到东西）"
                 self._logger.warning(f"[BiliBrowse] {self.last_error}")
@@ -648,7 +824,18 @@ class QQBilibiliBrowseService:
             # 让它按"我会不会真好奇、看完有没有话讲"挑，而不是按播放量挑。
             # 这一步是她"知道自己在看什么"的前提——代码挑出来的爆款，她
             # 只知道标题，聊起来就是复读。
-            model_picks, pick_mode = await self._pick_deep_by_model(picked, deep_count)
+            #
+            # 宿主模式下跳过这一步：候选本来就是宿主的 discover 按它自己的
+            # 判定条件挑出来的（单 P、三分钟以内、弹幕密度够），再让模型从
+            # 里挑一遍纯属重复劳动——而且那是个跨进程的异步模型调用，插件
+            # 进程里会卡死（见 host_watch_service 模块头）。
+            from_host = bool(picked) and all(
+                str(v.get("source") or "").endswith("（项目）") for v in picked
+            )
+            if from_host:
+                model_picks, pick_mode = [], "host"
+            else:
+                model_picks, pick_mode = await self._pick_deep_by_model(picked, deep_count)
             deep_set: set[str] = set(model_picks)
 
             if not deep_set:
@@ -675,7 +862,14 @@ class QQBilibiliBrowseService:
             hollow = 0
 
             for bvid in [v["bvid"] for v in picked if v["bvid"] in deep_set]:
+                self._logger.info(
+                    f"[BiliBrowse] 深看 {bvid} {str(by_bvid[bvid].get('title') or '')[:30]}"
+                )
                 note = await self._watch(by_bvid[bvid])
+                self._logger.info(
+                    f"[BiliBrowse] 深看{'成功' if note.get('reactions') else '完成'}"
+                    f" {bvid} 反应={len(note.get('reactions') or [])} 来源={note.get('watched_by') or '自抓'}"
+                )
                 if self._is_hollow(note):
                     note["deep"] = False
                     note["hollow"] = True
@@ -753,6 +947,9 @@ class QQBilibiliBrowseService:
             deep_notes = [n for n in notes if n.get("deep")]
             dmk_hits = sum(1 for n in deep_notes if n.get("danmaku_samples"))
             sub_hits = sum(1 for n in deep_notes if n.get("subtitle_excerpt"))
+            # 宿主的 watch-together 看成的条数：这是"她真的看过"的条数，
+            # 跟上面两个（插件自己抓的素材）不是一回事，分开数。
+            host_deep = sum(1 for n in deep_notes if n.get("watched_by"))
             login_health = await self._judge_login_health(diag, len(deep_notes))
 
             summary = {
@@ -762,6 +959,9 @@ class QQBilibiliBrowseService:
                 "hollow": sum(1 for n in notes if n.get("hollow")),
                 "danmaku_hits": dmk_hits,
                 "subtitle_hits": sub_hits,
+                "host_deep": host_deep,
+                "host_error": self._host_error,
+                "host_watch": self._host_mode(),
                 "keywords": keywords,
                 # 本轮"看哪几条"是谁定的：model=她自己挑的，其余是兜底。
                 "pick_mode": pick_mode,
@@ -875,7 +1075,8 @@ class QQBilibiliBrowseService:
                 continue
             # 没有弹幕也没有字幕的，她其实说不出内容，不进候选——正是这种
             # "只见过标题"的条目让她把话讲空。
-            if not (note.get("danmaku_samples") or note.get("subtitle_excerpt")):
+            if not (note.get("danmaku_samples") or note.get("subtitle_excerpt")
+                    or note.get("reactions")):
                 continue
             up = str(note.get("up") or "").strip()
             if up:
@@ -942,6 +1143,12 @@ class QQBilibiliBrowseService:
                 sample = "、".join(str(d) for d in danmaku[:6] if str(d).strip())
                 if sample:
                     line += f"\n  弹幕里有：{sample[:160]}"
+            reactions = [str(item).strip() for item in (note.get("reactions") or []) if str(item).strip()]
+            if reactions:
+                # 这是她当时看完说的原话（宿主真的把视频看了一遍产出的反应），
+                # 比第三方弹幕更贴近她自己的口吻，优先给她。
+                said = " / ".join(reactions[:4])
+                line += f"\n  你当时看完说了：{said[:240]}"
             tags = [str(t) for t in (note.get("tags") or [])[:5] if str(t).strip()]
             if tags:
                 line += f"\n  标签：{'、'.join(tags)}"
@@ -1019,6 +1226,9 @@ class QQBilibiliBrowseService:
             danmaku = [str(d).strip() for d in (note.get("danmaku_samples") or []) if str(d).strip()]
             if danmaku:
                 lines.append(f"     弹幕里有人刷：{'、'.join(danmaku[:10])[:200]}")
+            reactions = [str(item).strip() for item in (note.get("reactions") or []) if str(item).strip()]
+            if reactions:
+                lines.append(f"     你看完自己说的：{' / '.join(reactions[:6])[:280]}")
         return "\n".join(lines)
 
     @staticmethod
@@ -1064,6 +1274,13 @@ class QQBilibiliBrowseService:
             score = 0.0
 
             subtitle = str(note.get("subtitle_excerpt") or "") or str(note.get("desc") or "")
+            # 她的反应台词也是她自己说过的话：等她回头转述时，那些词最可能
+            # 原样出现在这里，把它并进比对语料，链接就不会配到别的片上。
+            reactions_text = " ".join(
+                str(item) for item in (note.get("reactions") or []) if str(item).strip()
+            )
+            if reactions_text:
+                subtitle = f"{subtitle} {reactions_text}".strip()
             if subtitle:
                 hits = content_grams & _bigrams(subtitle)
                 if len(hits) >= 3:
@@ -1220,6 +1437,9 @@ class QQBilibiliBrowseService:
             subtitle = str(note.get("subtitle_excerpt") or "").strip()
             if subtitle:
                 line += f"。内容大概是：{_gist(subtitle, 180)}"
+            reactions = [str(item).strip() for item in (note.get("reactions") or []) if str(item).strip()]
+            if reactions:
+                line += f"。你看完说：{' / '.join(reactions[:4])[:200]}"
             if bvid:
                 line += f"。链接：https://www.bilibili.com/video/{bvid}"
             lines.append(line)
@@ -1248,6 +1468,10 @@ class QQBilibiliBrowseService:
             "interval_minutes": self._cfg("bilibili_browse_interval_minutes", 60),
             "batch_size": self._cfg("bilibili_browse_batch_size", 20),
             "deep_count": self._cfg("bilibili_browse_deep_count", 5),
+            # 选片和深看是不是走项目自己的 watch-together。
+            "host_watch": self._host_mode(),
+            "host_api_base": self.host_watch._base(),
+            "host_error": self._host_error,
             "note_count": len(notes),
             "deep_count_total": len(deep),
             "last_browse_at": last_at,
@@ -1285,6 +1509,8 @@ class QQBilibiliBrowseService:
                     "up": n.get("up"),
                     "has_subtitle": bool(n.get("subtitle_excerpt")),
                     "has_danmaku": bool(n.get("danmaku_samples")),
+                    "has_reactions": bool(n.get("reactions")),
+                    "watched_by": n.get("watched_by") or "",
                 }
                 for n in self.candidate_notes(limit=6)
             ],

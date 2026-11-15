@@ -210,6 +210,18 @@ class QQAutoReplyConfigStore:
             "bilibili_browse_interval_minutes": 60,   # 多久刷一轮
             "bilibili_browse_batch_size": 20,         # 一轮收集多少条
             "bilibili_browse_deep_count": 5,          # 其中几条深看（抓弹幕+字幕）
+            # 选片和深看交给 N.E.K.O 自己的 watch-together（宿主 48911 的
+            # /api/watch-together）：它按项目自己的判定挑短视频，看的时候
+            # 抽帧做视觉分析、按人设产出她自己的反应台词。关掉就退回插件
+            # 自己搜首页/热门 + 抓弹幕字幕的老路。
+            "bilibili_host_watch": True,
+            # 宿主的准备任务最多等多久。实测一条三分钟的视频：视觉分析 + 抽热点约两分半，
+            # 之后要在免费 TTS 有空时才合成她的台词，整条 240 秒左右才 ready。
+            # 给到 420 秒留足排队余量；宿主自己也允许 1800 秒。
+            "bilibili_host_watch_timeout_seconds": 420,
+            # 一轮最多让宿主深看几条。宿主同一时刻只受理一个 prepare、一条要占
+            # 三四分钟，所以默认一轮只看一条——够她聊，也不会把一轮拖到十几分钟。
+            "bilibili_host_deep_max": 1,
             # 空列表 = 用插件内置的默认兴趣词（猫咪/做饭/恐怖游戏/冷知识…）
             "bilibili_interest_keywords": [],
             "bilibili_hot_ratio": 0.15,               # 掺多少全站热门
